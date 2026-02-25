@@ -12,20 +12,7 @@
       },
       "connect": {
         "region": "us-west-2",
-        "instanceAlias": "automatevoicetest00dfj00000irehf.my.connect.aws"
-      }
-    },
-    {
-      "id": "winfield",
-      "label": "Winfield Sandbox",
-      "customer": "Winfield",
-      "envFile": "instances/winfield.env",
-      "salesforce": {
-        "loginUrl": "https://test.salesforce.com",
-        "appName": "Winfield Service"
-      },
-      "connect": {
-        "region": "us-west-2"
+        "instanceAlias": "your-connect-instance.my.connect.aws"
       }
     }
   ]
