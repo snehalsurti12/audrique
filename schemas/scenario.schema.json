@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/voice-test/scenario.schema.json",
+  "title": "Voice Test Scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "entryPoint", "caller", "steps", "expect", "timeouts"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "description": {
+      "type": "string"
+    },
+    "entryPoint": {
+      "type": "string"
+    },
+    "caller": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["phone", "contactExists"],
+      "properties": {
+        "phone": {
+          "type": "string",
+          "pattern": "^\\+[1-9][0-9]{7,14}$"
+        },
+        "contactExists": {
+          "type": "boolean"
+        },
+        "attributes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["dial", "send_dtmf", "wait", "hangup"]
+          },
+          "value": {
+            "type": "string"
+          },
+          "seconds": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "send_dtmf"
+                }
+              }
+            },
+            "then": {
+              "required": ["value"]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "wait"
+                }
+              }
+            },
+            "then": {
+              "required": ["seconds"]
+            }
+          }
+        ]
+      }
+    },
+    "expect": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "equals"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "connect.flow_path",
+              "connect.agent_offer",
+              "connect.disconnect_reason",
+              "sf.attendance.voicecall_created",
+              "sf.attendance.agentwork_created",
+              "sf.attendance.offer_state",
+              "sf.attendance.case_created",
+              "sf.attendance.voicecall_linked_case",
+              "sf.attendance.contact_match",
+              "sf.ui.incoming_toast_visible",
+              "sf.ui.accept_button_visible",
+              "sf.ui.call_panel_active",
+              "sf.ui.screen_pop_record_type",
+              "sf.ui.wrapup_visible",
+              "sf.ui.required_disposition_enforced"
+            ]
+          },
+          "equals": {
+            "oneOf": [
+              { "type": "boolean" },
+              { "type": "string" }
+            ]
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "queueDeveloperName": {
+            "type": "string"
+          },
+          "agentUsername": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_offer_sec", "record_creation_sec", "ui_render_sec"],
+      "properties": {
+        "agent_offer_sec": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "record_creation_sec": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ui_render_sec": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

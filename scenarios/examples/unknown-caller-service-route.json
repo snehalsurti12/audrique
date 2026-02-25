@@ -1,0 +1,36 @@
+{
+  "id": "unknown-caller-service-route",
+  "description": "Unknown caller presses 1, routes to service, case created and linked.",
+  "entryPoint": "+18005550199",
+  "caller": {
+    "phone": "+14155550123",
+    "contactExists": false,
+    "attributes": {
+      "channel": "voice-test-auto"
+    }
+  },
+  "steps": [
+    { "action": "dial" },
+    { "action": "send_dtmf", "value": "1" },
+    { "action": "wait", "seconds": 3 },
+    { "action": "hangup" }
+  ],
+  "expect": [
+    { "type": "connect.flow_path", "equals": "service_menu > queue_service" },
+    { "type": "connect.agent_offer", "equals": true },
+    { "type": "sf.attendance.voicecall_created", "equals": true },
+    {
+      "type": "sf.attendance.case_created",
+      "equals": true,
+      "fields": { "Origin": "Phone", "Status": "New" }
+    },
+    { "type": "sf.attendance.voicecall_linked_case", "equals": true },
+    { "type": "sf.ui.incoming_toast_visible", "equals": true },
+    { "type": "sf.ui.accept_button_visible", "equals": true }
+  ],
+  "timeouts": {
+    "agent_offer_sec": 30,
+    "record_creation_sec": 60,
+    "ui_render_sec": 15
+  }
+}

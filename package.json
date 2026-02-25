@@ -1,0 +1,39 @@
+{
+  "name": "voice-test-auto",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scenario-driven Service Cloud Voice test harness",
+  "type": "module",
+  "scripts": {
+    "instance:list": "node scripts/instance-profile.mjs list",
+    "instance:current": "node scripts/instance-profile.mjs current",
+    "instance:use": "node scripts/instance-profile.mjs use",
+    "instance:auth:sf": "node scripts/run-instance.mjs auth:state",
+    "instance:auth:provider": "node scripts/run-instance.mjs auth:provider-state",
+    "instance:auth:connect": "node scripts/run-instance.mjs auth:connect-state",
+    "instance:test:ui": "node scripts/run-instance.mjs test:ui",
+    "instance:test:ui:state": "node scripts/run-instance.mjs test:ui:state",
+    "instance:test:ui:state:video": "PW_VIDEO_MODE=on node scripts/run-instance.mjs test:ui:state",
+    "instance:test:ui:state:video:merge": "PW_VIDEO_MODE=on node scripts/run-instance.mjs test:ui:state && npm run merge:videos",
+    "instance:test:e2e": "node scripts/run-instance-e2e-suite.mjs",
+    "merge:videos": "node scripts/merge-e2e-videos.mjs",
+    "highlight:reel": "node scripts/merge-e2e-highlight.mjs",
+    "audio:sample": "node scripts/generate-fake-audio.mjs",
+    "auth:state": "node scripts/sf-login-probe.mjs",
+    "auth:provider-state": "node scripts/capture-provider-session.mjs",
+    "auth:connect-state": "node scripts/capture-connect-session.mjs",
+    "test:ui": "playwright test",
+    "test:ui:state": "SF_SKIP_LOGIN=true playwright test",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && npm run test:ui"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "twilio": "^5.8.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "defaultInstance": "personal",
+  "profiles": [
+    {
+      "id": "personal",
+      "label": "Personal Org",
+      "customer": "Internal",
+      "envFile": "instances/personal.env",
+      "salesforce": {
+        "loginUrl": "https://login.salesforce.com",
+        "appName": "Service Console"
+      },
+      "connect": {
+        "region": "us-west-2",
+        "instanceAlias": "automatevoicetest00dfj00000irehf.my.connect.aws"
+      }
+    },
+    {
+      "id": "winfield",
+      "label": "Winfield Sandbox",
+      "customer": "Winfield",
+      "envFile": "instances/winfield.env",
+      "salesforce": {
+        "loginUrl": "https://test.salesforce.com",
+        "appName": "Winfield Service"
+      },
+      "connect": {
+        "region": "us-west-2"
+      }
+    }
+  ]
+}

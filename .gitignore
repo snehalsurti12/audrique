@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Test artifacts (videos, screenshots, reports)
+test-results/
+playwright-report/
+
+# Auth sessions (cookies, tokens, storage states)
+.auth/
+
+# Instance-specific env files (may contain vault refs, org URLs)
+# Keep *.example files for reference
+instances/*.env
+
+# Active instance profile selector
+.instance-profile
+
+# macOS
+.DS_Store
+
+# Local IDE and tool settings
+.*laude/
+
+# Editor
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+
+# Runtime
+*.log
+npm-debug.log*

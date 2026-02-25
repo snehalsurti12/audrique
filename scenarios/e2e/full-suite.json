@@ -1,0 +1,83 @@
+{
+  "name": "SCV Full End-to-End Suite",
+  "stopOnFailure": false,
+  "scenarios": [
+    {
+      "id": "inbound-agent-offer",
+      "description": "Preflight + CCP outbound dial into entry number + agent accepts call + VoiceCall assertions.",
+      "enabled": true,
+      "allowFailure": false,
+      "mergeVideo": true,
+      "requiresEnv": [],
+      "env": {
+        "CALL_TRIGGER_MODE": "connect_ccp",
+        "CALL_EXPECTATION": "agent_offer",
+        "VERIFY_SUPERVISOR_QUEUE_WAITING": "false",
+        "VERIFY_SUPERVISOR_AGENT_OFFER": "false",
+        "VOICE_RING_TIMEOUT_SEC": "${E2E_RING_TIMEOUT_SEC:-90}",
+        "CONNECT_CCP_IVR_DIGITS": "${E2E_BASELINE_DTMF:-}",
+        "CONNECT_CCP_DTMF_MIN_CALL_ELAPSED_SEC": "${E2E_DTMF_MIN_CALL_ELAPSED_SEC:-5}"
+      }
+    },
+    {
+      "id": "ivr-support-queue-branch",
+      "description": "Send DTMF branch input and confirm supervisor queue waiting + agent offer in Support queue.",
+      "enabled": true,
+      "allowFailure": true,
+      "mergeVideo": true,
+      "requiresEnv": [],
+      "env": {
+        "CALL_TRIGGER_MODE": "connect_ccp",
+        "CALL_EXPECTATION": "agent_offer",
+        "CONNECT_CCP_IVR_DIGITS": "${E2E_SUPPORT_DTMF:-1}",
+        "CONNECT_CCP_DTMF_MIN_CALL_ELAPSED_SEC": "${E2E_DTMF_MIN_CALL_ELAPSED_SEC:-5}",
+        "CONNECT_CCP_IVR_INITIAL_DELAY_MS": "${E2E_SUPPORT_DTMF_DELAY_MS:-3500}",
+        "CONNECT_CCP_IVR_INTER_DIGIT_DELAY_MS": "${E2E_DTMF_INTER_DIGIT_DELAY_MS:-450}",
+        "CONNECT_CCP_IVR_POST_DELAY_MS": "${E2E_DTMF_POST_DELAY_MS:-1200}",
+        "VERIFY_SUPERVISOR_QUEUE_WAITING": "true",
+        "SUPERVISOR_QUEUE_NAME": "${SUPERVISOR_QUEUE_SUPPORT_NAME:-Support Queue}",
+        "VERIFY_SUPERVISOR_AGENT_OFFER": "true",
+        "SUPERVISOR_CHECK_BEFORE_ACCEPT": "true",
+        "SUPERVISOR_REQUIRE_PRE_ACCEPT_OBSERVATION": "false",
+        "SUPERVISOR_ALLOW_IN_PROGRESS_FALLBACK": "true",
+        "SUPERVISOR_SKIP_QUEUE_BACKLOG": "false",
+        "SUPERVISOR_REQUIRE_TABLE_SOURCE": "true",
+        "SUPERVISOR_REQUIRE_TOTAL_WAITING_HEADER": "true",
+        "ALLOW_DELTA_SIGNALS_IN_SUPERVISOR": "true",
+        "SUPERVISOR_SURFACE_NAME": "${SUPERVISOR_SURFACE_NAME:-Command Center for Service}",
+        "SUPERVISOR_AGENT_NAME": "${SUPERVISOR_AGENT_NAME:-}",
+        "SUPERVISOR_POST_QUEUE_HOLD_SEC": "${SUPERVISOR_POST_QUEUE_HOLD_SEC:-4}",
+        "OFFER_AFTER_QUEUE_TIMEOUT_SEC": "${E2E_OFFER_AFTER_QUEUE_TIMEOUT_SEC:-120}",
+        "VOICE_RING_TIMEOUT_SEC": "${E2E_RING_TIMEOUT_SEC:-120}"
+      }
+    },
+    {
+      "id": "ivr-timeout-default-queue-branch",
+      "description": "Do not send DTMF and verify waiting appears in default/basic queue in supervisor.",
+      "enabled": true,
+      "allowFailure": true,
+      "mergeVideo": true,
+      "requiresEnv": [],
+      "env": {
+        "CALL_TRIGGER_MODE": "connect_ccp",
+        "CALL_EXPECTATION": "agent_offer",
+        "CONNECT_CCP_IVR_DIGITS": "",
+        "VERIFY_SUPERVISOR_QUEUE_WAITING": "true",
+        "SUPERVISOR_QUEUE_NAME": "${SUPERVISOR_QUEUE_BASIC_NAME:-SCV Basic Queue}",
+        "VERIFY_SUPERVISOR_AGENT_OFFER": "false",
+        "SUPERVISOR_CHECK_BEFORE_ACCEPT": "true",
+        "SUPERVISOR_REQUIRE_PRE_ACCEPT_OBSERVATION": "false",
+        "SUPERVISOR_ALLOW_IN_PROGRESS_FALLBACK": "true",
+        "SUPERVISOR_SKIP_QUEUE_BACKLOG": "false",
+        "SUPERVISOR_REQUIRE_TABLE_SOURCE": "true",
+        "SUPERVISOR_REQUIRE_TOTAL_WAITING_HEADER": "true",
+        "ALLOW_DELTA_SIGNALS_IN_SUPERVISOR": "true",
+        "SUPERVISOR_SURFACE_NAME": "${SUPERVISOR_SURFACE_NAME:-Command Center for Service}",
+        "SUPERVISOR_POST_QUEUE_HOLD_SEC": "${SUPERVISOR_POST_QUEUE_HOLD_SEC:-4}",
+        "SUPERVISOR_QUEUE_WAIT_TIMEOUT_SEC": "180",
+        "OFFER_AFTER_QUEUE_TIMEOUT_SEC": "180",
+        "VOICE_RING_TIMEOUT_SEC": "180"
+      }
+    }
+  ]
+}
