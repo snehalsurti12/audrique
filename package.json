@@ -1,9 +1,31 @@
 {
-  "name": "voice-test-auto",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Scenario-driven Service Cloud Voice test harness",
+  "name": "audrique",
+  "version": "0.1.0-alpha",
+  "description": "End-to-end testing framework for contact centers. Coordinates voice call automation, CRM verification, and telephony validation in declarative test scenarios.",
   "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "contact-center",
+    "e2e-testing",
+    "salesforce",
+    "service-cloud-voice",
+    "amazon-connect",
+    "playwright",
+    "voice-testing",
+    "ivr",
+    "telephony",
+    "twilio"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/audrique"
+  },
+  "bin": {
+    "audrique": "./bin/audrique.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "instance:list": "node scripts/instance-profile.mjs list",
     "instance:current": "node scripts/instance-profile.mjs current",
@@ -16,6 +38,11 @@
     "instance:test:ui:state:video": "PW_VIDEO_MODE=on node scripts/run-instance.mjs test:ui:state",
     "instance:test:ui:state:video:merge": "PW_VIDEO_MODE=on node scripts/run-instance.mjs test:ui:state && npm run merge:videos",
     "instance:test:e2e": "node scripts/run-instance-e2e-suite.mjs",
+    "instance:test:e2e:v2": "E2E_SUITE_FILE=scenarios/e2e/full-suite-v2.json node scripts/run-instance-e2e-suite.mjs",
+    "instance:test:e2e:v2:dry": "E2E_SUITE_FILE=scenarios/e2e/full-suite-v2.json E2E_SUITE_DRY_RUN=true node scripts/run-instance-e2e-suite.mjs",
+    "studio": "node webapp/server.mjs",
+    "scenario:create": "node scripts/create-scenario.mjs",
+    "scenario:create:append": "node scripts/create-scenario.mjs --append scenarios/e2e/full-suite-v2.json",
     "merge:videos": "node scripts/merge-e2e-videos.mjs",
     "highlight:reel": "node scripts/merge-e2e-highlight.mjs",
     "audio:sample": "node scripts/generate-fake-audio.mjs",

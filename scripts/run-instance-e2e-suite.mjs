@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { isDeclarativeSuite, scenarioToEnv, printBridgeMapping } from "./scenario-bridge.mjs";
 
 const DEFAULT_SUITE_FILE = "scenarios/e2e/full-suite.json";
 const DEFAULT_RESULTS_ROOT = path.resolve(process.cwd(), "test-results", "e2e-suite");
@@ -33,11 +34,21 @@ async function main() {
   const scenarioResults = [];
   const suiteStartedAt = Date.now();
 
+  const suiteIsV2 = isDeclarativeSuite(suite);
   console.log(`E2E suite: ${suiteName}`);
   console.log(`Suite config: ${suiteFile}`);
+  console.log(`Suite format: ${suiteIsV2 ? "v2 (declarative steps)" : "v1 (env overrides)"}`);
   console.log(`Results root: ${runDir}`);
   if (dryRun) {
     console.log("Dry-run mode enabled (E2E_SUITE_DRY_RUN=true).");
+    if (suiteIsV2) {
+      console.log("\n--- Declarative Bridge Mapping ---");
+      for (const s of suite.scenarios) {
+        console.log(printBridgeMapping(s, suite.defaults));
+        console.log("");
+      }
+      console.log("--- End Bridge Mapping ---\n");
+    }
   }
 
   for (let index = 0; index < suite.scenarios.length; index += 1) {
@@ -82,7 +93,11 @@ async function main() {
       continue;
     }
 
-    const expandedEnv = expandScenarioEnv(scenario.env ?? {}, process.env);
+    // Auto-detect v2 declarative format vs v1 env-var format.
+    const isV2 = isDeclarativeSuite(suite);
+    const expandedEnv = isV2
+      ? scenarioToEnv(scenario, suite.defaults)
+      : expandScenarioEnv(scenario.env ?? {}, process.env);
     const playwrightArgs = Array.isArray(scenario.playwrightArgs)
       ? scenario.playwrightArgs.map((value) => String(value))
       : [];

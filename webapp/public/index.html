@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audrique — Scenario Studio</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Top bar -->
+    <header class="top-bar">
+      <div class="logo">
+        <span class="logo-icon">&#x25C9;</span>
+        <span class="logo-text">Audrique</span>
+        <span class="logo-sub">Scenario Studio</span>
+      </div>
+      <div class="top-actions">
+        <select id="suite-selector" class="suite-select">
+          <option value="">Loading suites...</option>
+        </select>
+      </div>
+    </header>
+
+    <!-- Main layout -->
+    <div class="main-layout">
+      <!-- Left sidebar: scenario list -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <h3>Scenarios</h3>
+          <div class="sidebar-header-actions">
+            <button class="btn btn-primary btn-sm" id="btn-new-scenario">+ New</button>
+            <button class="btn btn-success btn-sm" id="btn-run-suite" title="Run all scenarios">Run</button>
+          </div>
+        </div>
+        <div class="scenario-list" id="scenario-list">
+          <div class="empty-state">Select a suite to view scenarios</div>
+        </div>
+      </aside>
+
+      <!-- Center: wizard / builder -->
+      <main class="builder-area" id="builder-area">
+        <!-- Landing state -->
+        <div class="landing" id="landing">
+          <div class="landing-icon">&#x260E;</div>
+          <h2>Build Test Scenarios Visually</h2>
+          <p>Create end-to-end voice call test cases with a guided wizard.<br/>No framework knowledge required.</p>
+          <div class="landing-actions">
+            <button class="btn btn-primary btn-lg" id="btn-start-new">Create New Scenario</button>
+            <button class="btn btn-outline btn-lg" id="btn-start-edit">Edit Existing</button>
+          </div>
+        </div>
+
+        <!-- Wizard -->
+        <div class="wizard hidden" id="wizard">
+          <!-- Editing banner -->
+          <div class="editing-banner hidden" id="editing-banner">
+            <span class="eb-label">Editing:</span>
+            <span class="eb-name" id="editing-name"></span>
+            <button class="btn btn-ghost btn-sm" id="btn-cancel-edit">Cancel</button>
+          </div>
+
+          <!-- Progress -->
+          <div class="wizard-progress">
+            <div class="progress-steps" id="progress-steps"></div>
+            <div class="progress-bar">
+              <div class="progress-fill" id="progress-fill"></div>
+            </div>
+          </div>
+
+          <!-- Step container -->
+          <div class="wizard-step-container" id="wizard-step-container">
+            <!-- Steps injected dynamically -->
+          </div>
+
+          <!-- Nav -->
+          <div class="wizard-nav">
+            <button class="btn btn-outline" id="btn-back" disabled>Back</button>
+            <div class="wizard-nav-right">
+              <button class="btn btn-ghost" id="btn-preview">Preview JSON</button>
+              <button class="btn btn-primary" id="btn-next">Next</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- JSON Preview panel -->
+        <div class="preview-panel hidden" id="preview-panel">
+          <div class="preview-header">
+            <h3>Generated Scenario</h3>
+            <div class="preview-actions">
+              <button class="btn btn-ghost btn-sm" id="btn-copy-json">Copy</button>
+              <button class="btn btn-ghost btn-sm" id="btn-env-preview">View Env Vars</button>
+              <button class="btn btn-outline btn-sm" id="btn-close-preview">Back to Editor</button>
+            </div>
+          </div>
+          <div class="preview-tabs">
+            <button class="preview-tab active" data-tab="json">Scenario JSON</button>
+            <button class="preview-tab" data-tab="env">Env Vars</button>
+            <button class="preview-tab" data-tab="steps">Visual Flow</button>
+          </div>
+          <div class="preview-body">
+            <pre id="preview-json" class="preview-code"></pre>
+            <pre id="preview-env" class="preview-code hidden"></pre>
+            <div id="preview-flow" class="preview-flow hidden"></div>
+          </div>
+          <div class="preview-footer">
+            <button class="btn btn-outline" id="btn-back-to-edit">Edit Scenario</button>
+            <button class="btn btn-primary" id="btn-save-scenario">Save to Suite</button>
+          </div>
+        </div>
+
+        <!-- Run Panel (live execution) -->
+        <div class="run-panel hidden" id="run-panel">
+          <div class="run-header">
+            <div class="run-header-left">
+              <div class="run-status-dot" id="run-status-dot"></div>
+              <h3 id="run-title">Suite Execution</h3>
+              <span class="run-timer" id="run-timer">00:00</span>
+            </div>
+            <div class="run-header-right">
+              <button class="btn btn-ghost btn-sm" id="btn-run-dry">Dry Run</button>
+              <button class="btn btn-danger btn-sm hidden" id="btn-run-stop">Stop</button>
+              <button class="btn btn-outline btn-sm" id="btn-run-close">Close</button>
+            </div>
+          </div>
+
+          <!-- Scenario progress cards -->
+          <div class="run-scenarios" id="run-scenarios"></div>
+
+          <!-- Terminal output -->
+          <div class="run-terminal" id="run-terminal">
+            <div class="run-terminal-header">
+              <span>Output</span>
+              <button class="btn btn-ghost btn-sm" id="btn-run-clear">Clear</button>
+            </div>
+            <div class="run-terminal-body" id="run-terminal-body">
+              <div class="run-terminal-placeholder">Click "Run" or "Dry Run" to start execution</div>
+            </div>
+          </div>
+
+          <!-- Summary bar -->
+          <div class="run-summary hidden" id="run-summary">
+            <div class="run-summary-stats" id="run-summary-stats"></div>
+            <button class="btn btn-primary btn-sm" id="btn-run-rerun">Run Again</button>
+          </div>
+        </div>
+      </main>
+
+      <!-- Right panel: live preview -->
+      <aside class="right-panel" id="right-panel">
+        <div class="panel-header">
+          <h4>Live Preview</h4>
+        </div>
+        <div class="live-flow" id="live-flow">
+          <div class="flow-placeholder">Steps will appear here as you build</div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast-container" id="toast-container"></div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

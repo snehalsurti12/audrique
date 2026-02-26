@@ -24,6 +24,7 @@ import {
   forceOmniStatusSelection,
   ensureOmniStatus,
   dismissPresenceAppSwitchBanner,
+  dismissSalesforceSetupDialogs,
   isOmniOffline,
 } from "../src/sfOmniChannel";
 import {
@@ -182,6 +183,7 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
     }
     await assertAuthenticatedConsolePage(page);
     await ensureSalesforceApp(page, appName);
+    await dismissSalesforceSetupDialogs(page);
     await ensurePhoneUtilityOpen(page);
     const uiReadiness = await collectUiReadiness(page, appName);
     test.info().annotations.push({

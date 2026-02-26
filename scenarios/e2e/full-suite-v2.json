@@ -1,0 +1,595 @@
+{
+  "name": "SCV Full End-to-End Suite",
+  "version": 2,
+  "stopOnFailure": false,
+  "defaults": {
+    "callTrigger": {
+      "mode": "connect_ccp"
+    },
+    "timeouts": {
+      "ringSec": 90,
+      "supervisorQueueSec": 90,
+      "supervisorAgentOfferSec": 90,
+      "offerAfterQueueSec": 120
+    }
+  },
+  "scenarios": [
+    {
+      "id": "inbound-agent-offer",
+      "description": "Direct inbound call — agent accepts, VoiceCall screen pop appears.",
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "entryNumber": "+18005550199"
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "detect_incoming",
+          "timeoutSec": 90
+        },
+        {
+          "action": "accept_call"
+        },
+        {
+          "action": "verify_screen_pop"
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.call_connected",
+          "equals": true
+        },
+        {
+          "type": "e2e.screen_pop_detected",
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "ivr-support-queue-branch",
+      "description": "DTMF 1 routes to Support Queue — supervisor verifies queue + agent offer.",
+      "allowFailure": true,
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "entryNumber": "+18005550199",
+        "ivrDigits": "1",
+        "ivrInitialDelayMs": 4000,
+        "ivrInterDigitDelayMs": 450,
+        "ivrPostDelayMs": 1200,
+        "dtmfMinCallElapsedSec": 5
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "start_supervisor",
+          "queue": "Support Queue",
+          "observeAgentOffer": true,
+          "checkBeforeAccept": true
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "detect_incoming",
+          "timeoutSec": 120
+        },
+        {
+          "action": "accept_call"
+        },
+        {
+          "action": "verify_screen_pop"
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.call_connected",
+          "equals": true
+        },
+        {
+          "type": "e2e.supervisor_queue_observed",
+          "queue": "Support Queue"
+        },
+        {
+          "type": "e2e.supervisor_agent_offer",
+          "equals": true
+        },
+        {
+          "type": "e2e.screen_pop_detected",
+          "equals": true
+        }
+      ],
+      "timeouts": {
+        "ringSec": 120,
+        "supervisorPostQueueHoldSec": 4
+      }
+    },
+    {
+      "id": "ivr-timeout-default-queue-branch",
+      "description": "No DTMF — IVR timeout routes to default SCV Basic Queue.",
+      "allowFailure": true,
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "entryNumber": "+18005550199",
+        "ivrDigits": "",
+        "ivrInitialDelayMs": 4000,
+        "ivrInterDigitDelayMs": 450,
+        "ivrPostDelayMs": 1200,
+        "dtmfMinCallElapsedSec": 5
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "start_supervisor",
+          "queue": "SCV Basic Queue",
+          "checkBeforeAccept": true
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "detect_incoming",
+          "timeoutSec": 180
+        },
+        {
+          "action": "accept_call"
+        },
+        {
+          "action": "verify_screen_pop"
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.call_connected",
+          "equals": true
+        },
+        {
+          "type": "e2e.supervisor_queue_observed",
+          "queue": "SCV Basic Queue"
+        },
+        {
+          "type": "e2e.screen_pop_detected",
+          "equals": true
+        }
+      ],
+      "timeouts": {
+        "ringSec": 180,
+        "supervisorQueueSec": 180,
+        "offerAfterQueueSec": 180,
+        "supervisorPostQueueHoldSec": 4
+      }
+    },
+    {
+      "id": "skill-based-spanish-support",
+      "description": "Skill-based routing — caller requesting Spanish routes to agent with Spanish skill.",
+      "allowFailure": true,
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "routingType": "skill",
+        "ivrDigits": "2",
+        "requiredSkills": [
+          {
+            "name": "Spanish",
+            "minLevel": 3
+          }
+        ],
+        "ivrInitialDelayMs": 3500,
+        "ivrInterDigitDelayMs": 450,
+        "ivrPostDelayMs": 1200,
+        "dtmfMinCallElapsedSec": 5
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "start_supervisor",
+          "queue": "Support Queue",
+          "surface": "Command Center for Service",
+          "skill": "Spanish",
+          "observeAgentOffer": true,
+          "checkBeforeAccept": true
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "detect_incoming",
+          "timeoutSec": 120
+        },
+        {
+          "action": "accept_call"
+        },
+        {
+          "action": "verify_screen_pop"
+        },
+        {
+          "action": "verify_voicecall_record"
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.call_connected",
+          "equals": true
+        },
+        {
+          "type": "e2e.supervisor_queue_observed",
+          "queue": "Support Queue"
+        },
+        {
+          "type": "e2e.supervisor_agent_offer",
+          "equals": true
+        },
+        {
+          "type": "e2e.screen_pop_detected",
+          "equals": true
+        },
+        {
+          "type": "e2e.routing_type",
+          "equals": "skill"
+        },
+        {
+          "type": "e2e.skill_matched",
+          "skill": "Spanish",
+          "equals": true
+        },
+        {
+          "type": "sf.attendance.psr_routing_type",
+          "equals": "SkillsBased"
+        },
+        {
+          "type": "sf.attendance.psr_skill",
+          "skill": "Spanish",
+          "equals": true
+        },
+        {
+          "type": "sf.attendance.voicecall_call_type",
+          "equals": "Inbound"
+        }
+      ],
+      "timeouts": {
+        "ringSec": 120,
+        "offerAfterQueueSec": 120,
+        "supervisorPostQueueHoldSec": 4
+      }
+    },
+    {
+      "id": "multi-level-ivr-billing",
+      "description": "Multi-level IVR — Press 1 for English, then 3 for Billing department.",
+      "allowFailure": true,
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "routingType": "queue",
+        "ivrSequence": [
+          {
+            "digits": "1",
+            "label": "English",
+            "delayBeforeMs": 4000
+          },
+          {
+            "digits": "3",
+            "label": "Billing",
+            "delayBeforeMs": 2000
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "start_supervisor",
+          "queue": "Billing Queue",
+          "surface": "Command Center for Service",
+          "observeAgentOffer": true,
+          "checkBeforeAccept": true
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "send_dtmf_sequence",
+          "digits": "1",
+          "delayBeforeMs": 4000
+        },
+        {
+          "action": "wait_for_ivr_prompt",
+          "timeoutSec": 10
+        },
+        {
+          "action": "send_dtmf_sequence",
+          "digits": "3",
+          "delayBeforeMs": 500
+        },
+        {
+          "action": "detect_incoming",
+          "timeoutSec": 120
+        },
+        {
+          "action": "accept_call"
+        },
+        {
+          "action": "verify_screen_pop"
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.call_connected",
+          "equals": true
+        },
+        {
+          "type": "e2e.supervisor_queue_observed",
+          "queue": "Billing Queue"
+        },
+        {
+          "type": "e2e.supervisor_agent_offer",
+          "equals": true
+        },
+        {
+          "type": "e2e.screen_pop_detected",
+          "equals": true
+        },
+        {
+          "type": "sf.attendance.agentwork_routing_type",
+          "equals": "QueueBased"
+        }
+      ],
+      "timeouts": {
+        "ringSec": 150,
+        "offerAfterQueueSec": 150,
+        "supervisorPostQueueHoldSec": 4
+      }
+    },
+    {
+      "id": "after-hours-closed-message",
+      "description": "Call outside business hours — system plays closed message and disconnects.",
+      "allowFailure": true,
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "callTiming": {
+          "window": "after_hours"
+        },
+        "noAgentBehavior": "prompt_and_disconnect"
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "listen_for_prompt",
+          "promptText": "office is currently closed",
+          "listenTimeoutSec": 15
+        },
+        {
+          "action": "wait_for_disconnect",
+          "timeoutSec": 30
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.prompt_played",
+          "contains": "closed",
+          "equals": true
+        },
+        {
+          "type": "e2e.call_disconnected_by_system",
+          "equals": true
+        },
+        {
+          "type": "e2e.no_agent_offer",
+          "equals": true
+        },
+        {
+          "type": "connect.business_hours_check",
+          "equals": "closed"
+        }
+      ],
+      "timeouts": {
+        "ringSec": 60
+      }
+    },
+    {
+      "id": "voicemail-no-agent-available",
+      "description": "No agent available — caller is offered voicemail, leaves message, VM record created.",
+      "allowFailure": true,
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "noAgentBehavior": "voicemail"
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "listen_for_prompt",
+          "promptText": "leave a message after the tone",
+          "listenTimeoutSec": 30
+        },
+        {
+          "action": "leave_voicemail",
+          "voicemailText": "Hi, I am calling about my account balance. Please call me back.",
+          "voicemailDurationSec": 8
+        },
+        {
+          "action": "wait_for_disconnect",
+          "timeoutSec": 15
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.voicemail_recorded",
+          "equals": true
+        },
+        {
+          "type": "e2e.no_agent_offer",
+          "equals": true
+        },
+        {
+          "type": "sf.attendance.voicemail_created",
+          "equals": true
+        },
+        {
+          "type": "sf.attendance.voicemail_transcript",
+          "contains": "account balance"
+        },
+        {
+          "type": "sf.attendance.voicemail_duration_gte",
+          "gte": 5
+        },
+        {
+          "type": "connect.voicemail_flow_entered",
+          "equals": true
+        }
+      ],
+      "timeouts": {
+        "ringSec": 120
+      }
+    },
+    {
+      "id": "callback-queue-full",
+      "description": "Queue full — caller offered callback, callback task created in Salesforce.",
+      "allowFailure": true,
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "ivrDigits": "1",
+        "noAgentBehavior": "callback",
+        "ivrInitialDelayMs": 3500,
+        "dtmfMinCallElapsedSec": 5
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "listen_for_prompt",
+          "promptText": "request a callback",
+          "listenTimeoutSec": 60
+        },
+        {
+          "action": "request_callback",
+          "callbackPhone": "+18005550199",
+          "digits": "1"
+        },
+        {
+          "action": "listen_for_prompt",
+          "promptText": "we will call you back",
+          "listenTimeoutSec": 10
+        },
+        {
+          "action": "wait_for_disconnect",
+          "timeoutSec": 15
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.callback_task_created",
+          "equals": true
+        },
+        {
+          "type": "e2e.call_disconnected_by_system",
+          "equals": true
+        },
+        {
+          "type": "sf.attendance.callback_task_created",
+          "equals": true
+        },
+        {
+          "type": "sf.attendance.callback_task_status",
+          "equals": "Open"
+        },
+        {
+          "type": "connect.callback_flow_entered",
+          "equals": true
+        }
+      ],
+      "timeouts": {
+        "ringSec": 120
+      }
+    },
+    {
+      "id": "ivr-greeting-prompt-validation",
+      "description": "Verify IVR greeting plays correct prompt before menu options.",
+      "allowFailure": true,
+      "callTrigger": {
+        "mode": "connect_ccp"
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "listen_for_prompt",
+          "promptText": "thank you for calling",
+          "listenTimeoutSec": 10
+        },
+        {
+          "action": "listen_for_prompt",
+          "promptText": "press 1 for support",
+          "listenTimeoutSec": 10
+        },
+        {
+          "action": "send_dtmf_sequence",
+          "digits": "1",
+          "delayBeforeMs": 500
+        },
+        {
+          "action": "detect_incoming",
+          "timeoutSec": 90
+        },
+        {
+          "action": "accept_call"
+        },
+        {
+          "action": "verify_screen_pop"
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.prompt_played",
+          "contains": "thank you for calling",
+          "equals": true
+        },
+        {
+          "type": "e2e.prompt_played",
+          "contains": "press 1 for support",
+          "equals": true
+        },
+        {
+          "type": "e2e.call_connected",
+          "equals": true
+        },
+        {
+          "type": "e2e.screen_pop_detected",
+          "equals": true
+        },
+        {
+          "type": "connect.prompt_played",
+          "equals": "greeting"
+        }
+      ],
+      "timeouts": {
+        "ringSec": 120
+      }
+    }
+  ]
+}

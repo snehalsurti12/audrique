@@ -855,6 +855,29 @@ export async function dismissOmniAnotherLocationBanner(page: Page): Promise<void
   }
 }
 
+export async function dismissSalesforceSetupDialogs(page: Page): Promise<void> {
+  // Salesforce shows various setup/walkthrough modals ("Get Started with Field Service",
+  // "Welcome to...", "Try the new...") that block interactions. Dismiss them all.
+  const dismissSelectors = [
+    // "Dismiss" button on setup modals
+    page.getByRole("button", { name: /^dismiss$/i }).first(),
+    // Generic close button on modal dialogs
+    page.locator("div[role='dialog'] button[title='Close' i]").first(),
+    // "Not Now" on walkthrough prompts
+    page.getByRole("button", { name: /^not now$/i }).first(),
+    // "Maybe Later" on feature prompts
+    page.getByRole("button", { name: /^maybe later$/i }).first(),
+    // Close X on modals
+    page.locator("div.modal-container button.slds-modal__close").first(),
+  ];
+  for (const btn of dismissSelectors) {
+    if ((await btn.count().catch(() => 0)) > 0 && (await btn.isVisible().catch(() => false))) {
+      await btn.click({ force: true }).catch(() => undefined);
+      await page.waitForTimeout(500);
+    }
+  }
+}
+
 // ── Offline detection ────────────────────────────────────────────────────────
 
 export async function isOmniOffline(page: Page): Promise<boolean> {

@@ -13,6 +13,27 @@
       "connect": {
         "region": "us-west-2",
         "instanceAlias": "your-connect-instance.my.connect.aws"
+      },
+      "discovery": {
+        "autoDiscover": true,
+        "cacheFile": ".cache/org-vocabulary-personal.json",
+        "cacheTtlMinutes": 60
+      },
+      "vocabulary": {
+        "_comment": "Auto-populated by org discovery. Manual overrides take precedence.",
+        "omniTargetStatus": null,
+        "queues": {},
+        "skills": {},
+        "ivrFlows": {},
+        "routing": {
+          "defaultType": "queue",
+          "skillBasedEnabled": false
+        },
+        "supervisor": {
+          "surfaceName": null,
+          "appName": null
+        },
+        "selectorOverrides": {}
       }
     }
   ]
