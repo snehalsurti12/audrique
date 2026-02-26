@@ -392,7 +392,7 @@ The declarative JSON format is intentionally **LLM-friendly**:
 - Structured, schema-validated — easy for LLMs to generate correctly
 - Action-based — maps directly to natural language verbs
 - Assertion-based — translatable from "should" statements
-- Platform-agnostic — same format works across CRM providers
+- **Platform-agnostic** — same scenario format works across Salesforce, ServiceNow, SAP, Zendesk, and future CRM/telephony providers. Write once, test anywhere.
 
 ---
 
@@ -450,16 +450,60 @@ audrique/
 
 ## Supported Platforms
 
-| Component | Technology |
-|-----------|------------|
-| CRM | Salesforce Service Cloud Voice |
-| Telephony | Amazon Connect |
-| Call Provider | Twilio / Connect CCP / Manual |
-| Browser Automation | Playwright (Chromium) |
-| Video Evidence | FFmpeg (VP9/WebM) |
-| Secret Management | HashiCorp Vault / Environment |
-| Language | TypeScript / Node.js |
-| CI/CD | Any (headless, exit codes, JSON results) |
+**Current release** supports Salesforce Service Cloud Voice + Amazon Connect. The architecture is **platform-agnostic by design** — the declarative scenario DSL, browser automation, and evidence pipeline are CRM-independent. Adding a new platform requires only a new verifier package and browser adapter.
+
+### Current Support (v0.1)
+
+| Component | Technology | Status |
+|-----------|------------|--------|
+| CRM | Salesforce Service Cloud Voice | **GA** |
+| Telephony | Amazon Connect | **GA** |
+| Call Provider | Twilio / Connect CCP / Manual | **GA** |
+| Browser Automation | Playwright (Chromium) | **GA** |
+| Video Evidence | FFmpeg (VP9/WebM) | **GA** |
+| Secret Management | HashiCorp Vault / Environment | **GA** |
+| Language | TypeScript / Node.js | **GA** |
+| CI/CD | Any (headless, exit codes, JSON results) | **GA** |
+
+### Platform Roadmap
+
+| Platform | Type | Planned | Notes |
+|----------|------|---------|-------|
+| **ServiceNow** CSM / ITSM | CRM | v0.3 | Agent Workspace, CTI softphone, incident screen pop |
+| **SAP** Service Cloud | CRM | v0.4 | Communication center, SAP CRM UI5 verification |
+| **Zendesk** Talk | CRM + Telephony | v0.4 | Talk integration, ticket screen pop, CSAT survey |
+| **Microsoft Dynamics 365** | CRM | v0.5 | Omnichannel for Customer Service, Copilot |
+| **Genesys Cloud CX** | Telephony | v0.3 | PureCloud dialer, predictive routing, WFM |
+| **Five9** | Telephony | v0.4 | Intelligent Cloud Contact Center dialer |
+| **NICE CXone** | Telephony | v0.5 | ACD routing, workforce optimization |
+| **Avaya OneCloud** | Telephony | v0.5 | Avaya Experience Platform, AXP workspaces |
+| **RingCentral** Contact Center | Telephony | v0.4 | RingCX dialer, skills-based routing |
+| **Talkdesk** | Telephony | v0.5 | AI-powered contact center platform |
+
+### Extensibility Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    Platform-Agnostic Core                         │
+│                                                                   │
+│   Scenario DSL (JSON v2)  →  Agentic Runner  →  Evidence Pipeline│
+│                                                                   │
+│   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│   │ CRM Adapters  │  │ Telephony    │  │ Backend      │           │
+│   │               │  │ Adapters     │  │ Verifiers    │           │
+│   │ ● Salesforce ✓│  │ ● Connect  ✓ │  │ ● SOQL     ✓ │          │
+│   │ ○ ServiceNow  │  │ ○ Genesys    │  │ ○ ServiceNow│           │
+│   │ ○ SAP         │  │ ○ Five9      │  │   REST API  │           │
+│   │ ○ Zendesk     │  │ ○ NICE CXone │  │ ○ SAP OData │           │
+│   │ ○ Dynamics365 │  │ ○ Avaya      │  │ ○ Zendesk   │           │
+│   │               │  │ ○ RingCentral│  │   API       │           │
+│   └──────────────┘  └──────────────┘  └──────────────┘           │
+│                                                                   │
+│   ✓ = Available now    ○ = Planned                                │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+Each new platform is a **drop-in package** (`packages/verifier-servicenow/`, `packages/provider-genesys/`, etc.) — no changes to core runner, DSL, or evidence pipeline required. Community contributions welcome.
 
 ## Contributing
 
