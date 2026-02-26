@@ -45,7 +45,7 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 
 | Capability | Description |
 |------------|-------------|
-| **Autonomous call orchestration** | Places real calls via Twilio/Connect CCP, navigates IVR menus with DTMF |
+| **Autonomous call orchestration** | Places real calls via Connect CCP (Twilio beta), navigates IVR menus with DTMF |
 | **Multi-agent browser verification** | 3 parallel Playwright sessions (Agent, CCP, Supervisor) |
 | **Declarative scenario DSL** | JSON-based scenarios — no code to write |
 | **Visual Scenario Studio** | Drag-and-drop wizard builds scenarios at localhost:4200 |
@@ -109,7 +109,7 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 ```
 
 **Four autonomous agents** work in parallel during each test:
-1. **Call Agent** — Places real calls via Twilio or Connect CCP, sends DTMF, navigates IVR
+1. **Call Agent** — Places real calls via Connect CCP (Twilio beta), sends DTMF, navigates IVR
 2. **SF Agent Browser** — Salesforce console (Omni-Channel status, phone utility, screen pop, transcript)
 3. **CCP Agent Browser** — Amazon Connect softphone (dial confirmation, call state, hold/resume)
 4. **Supervisor Browser** — Command Center (queue monitoring, agent offers, real-time metrics)
@@ -121,7 +121,7 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 - Node.js 18+
 - A Salesforce org with Service Cloud Voice enabled
 - Amazon Connect instance linked to the org
-- (Optional) Twilio account for automated call triggering
+- (Optional) Twilio account for automated call triggering (beta — not yet fully tested)
 
 ### Install
 
@@ -458,7 +458,7 @@ audrique/
 |-----------|------------|--------|
 | CRM | Salesforce Service Cloud Voice | **GA** |
 | Telephony | Amazon Connect | **GA** |
-| Call Provider | Twilio / Connect CCP / Manual | **GA** |
+| Call Provider | Connect CCP (tested) / Twilio (beta) / Manual | **GA** |
 | Browser Automation | Playwright (Chromium) | **GA** |
 | Video Evidence | FFmpeg (VP9/WebM) | **GA** |
 | Secret Management | HashiCorp Vault / Environment | **GA** |
