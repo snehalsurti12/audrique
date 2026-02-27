@@ -53,6 +53,10 @@ const COMMANDS = {
     desc: "Generate highlight reel from suite run",
     usage: "audrique highlight [results-dir]",
   },
+  doctor: {
+    desc: "Pre-flight check — validate tools, network, and credentials",
+    usage: "audrique doctor",
+  },
 };
 
 function showHelp() {
@@ -182,6 +186,11 @@ switch (command) {
 
   case "highlight": {
     exec("scripts/merge-e2e-highlight.mjs");
+    break;
+  }
+
+  case "doctor": {
+    exec("scripts/doctor.mjs");
     break;
   }
 
