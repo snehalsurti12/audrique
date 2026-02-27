@@ -158,7 +158,6 @@ body {
   background: var(--bg-hover);
   border-color: var(--border-light);
 }
-.scenario-card:hover .sc-actions { opacity: 1; }
 .scenario-card.active {
   background: var(--accent-dim);
   border-color: var(--accent);
@@ -185,12 +184,21 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.scenario-card .sc-bottom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 6px;
+}
 .scenario-card .sc-actions {
   display: flex;
-  gap: 2px;
+  gap: 1px;
   opacity: 0;
   transition: opacity var(--transition);
+  flex-shrink: 0;
 }
+.scenario-card:hover .sc-actions,
 .scenario-card.active .sc-actions { opacity: 1; }
 .sc-btn {
   background: none;
@@ -248,8 +256,9 @@ body {
 .scenario-card .sc-badges {
   display: flex;
   gap: 4px;
-  margin-top: 6px;
   flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
 }
 
 .badge {
@@ -1389,7 +1398,9 @@ body {
 
 .sidebar-header-actions {
   display: flex;
-  gap: 4px;
+  gap: 3px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .btn-success {

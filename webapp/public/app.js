@@ -146,8 +146,6 @@ function bindGlobalEvents() {
   document.getElementById("btn-suite-settings").addEventListener("click", openSuiteSettingsModal);
   document.getElementById("btn-suite-create").addEventListener("click", openCreateSuiteModal);
   document.getElementById("btn-connections").addEventListener("click", openConnectionsModal);
-  document.getElementById("btn-export-suite").addEventListener("click", exportSuite);
-  document.getElementById("btn-import-suite").addEventListener("click", importSuite);
 
   document.getElementById("btn-cancel-edit").addEventListener("click", () => {
     state.editingScenarioId = null;
@@ -239,15 +237,17 @@ function renderScenarioList() {
           <div class="sc-top-row">
             <span class="sc-drag-handle" title="Drag to reorder">&#x2630;</span>
             <div class="sc-id">${s.id}</div>
+          </div>
+          <div class="sc-desc">${s.description || ""}</div>
+          <div class="sc-bottom-row">
+            <div class="sc-badges">${badges.join("")}</div>
             <div class="sc-actions">
               <button class="sc-btn sc-btn-toggle" data-action="toggle" data-id="${s.id}" title="${isDisabled ? "Enable" : "Disable"} scenario">${isDisabled ? "&#x25CB;" : "&#x25CF;"}</button>
-              <button class="sc-btn sc-btn-dup" data-action="duplicate" data-id="${s.id}" title="Duplicate scenario">&#x2398;</button>
+              <button class="sc-btn sc-btn-dup" data-action="duplicate" data-id="${s.id}" title="Duplicate scenario">&#x29C9;</button>
               <button class="sc-btn sc-btn-edit" data-action="edit" data-id="${s.id}" title="Edit scenario">&#x270E;</button>
               <button class="sc-btn sc-btn-delete" data-action="delete" data-id="${s.id}" title="Delete scenario">&#x2715;</button>
             </div>
           </div>
-          <div class="sc-desc">${s.description || ""}</div>
-          <div class="sc-badges">${badges.join("")}</div>
         </div>
       `;
     })
@@ -3250,6 +3250,14 @@ function openSuiteSettingsModal() {
       <select class="form-select" id="modal-suite-conn">${profileOptionsHtml(suite.connectionSetId || "")}</select>
       <span class="form-hint">Tests in this suite will run against the selected connection</span>
     </div>
+    <div class="form-divider"></div>
+    <div class="form-group">
+      <label class="form-label">Import / Export</label>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline btn-sm" id="modal-suite-export-btn">Export Suite JSON</button>
+        <button class="btn btn-outline btn-sm" id="modal-suite-import-btn">Import Suite JSON</button>
+      </div>
+    </div>
     <div class="danger-zone">
       <div class="danger-zone-title">Danger Zone</div>
       <p>Permanently delete this suite and all its scenarios.</p>
@@ -3263,6 +3271,8 @@ function openSuiteSettingsModal() {
   openModal("Suite Settings", body, footer);
   document.getElementById("modal-suite-save-btn").addEventListener("click", updateSuite);
   document.getElementById("modal-suite-delete-btn").addEventListener("click", deleteSuite);
+  document.getElementById("modal-suite-export-btn").addEventListener("click", () => { closeModal(); exportSuite(); });
+  document.getElementById("modal-suite-import-btn").addEventListener("click", () => { closeModal(); importSuite(); });
 }
 
 async function updateSuite() {
