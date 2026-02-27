@@ -172,13 +172,18 @@ body {
 .scenario-card .sc-top-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 2px;
   margin-bottom: 3px;
 }
 .scenario-card .sc-id {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .scenario-card .sc-actions {
   display: flex;
@@ -201,6 +206,36 @@ body {
 .sc-btn:hover { background: var(--bg-active); }
 .sc-btn-edit:hover { color: var(--accent-light); }
 .sc-btn-delete:hover { color: var(--danger); }
+.sc-btn-toggle { font-size: 11px; }
+.sc-btn-toggle:hover { color: var(--warning); }
+.sc-btn-dup:hover { color: var(--success); }
+
+/* Drag handle */
+.sc-drag-handle {
+  cursor: grab;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 0 4px 0 0;
+  opacity: 0;
+  transition: opacity var(--transition);
+  user-select: none;
+  flex-shrink: 0;
+}
+.scenario-card:hover .sc-drag-handle,
+.scenario-card.active .sc-drag-handle { opacity: 0.6; }
+.sc-drag-handle:hover { opacity: 1 !important; }
+.sc-drag-handle:active { cursor: grabbing; }
+
+/* Drag states */
+.scenario-card.dragging {
+  opacity: 0.4;
+  border: 1px dashed var(--accent);
+}
+.scenario-card.drag-over {
+  border-top: 2px solid var(--accent-light);
+  margin-top: -1px;
+}
+
 .scenario-card .sc-desc {
   font-size: 11px;
   color: var(--text-muted);
