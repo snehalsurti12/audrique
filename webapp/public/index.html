@@ -19,6 +19,10 @@
         <select id="suite-selector" class="suite-select">
           <option value="">Loading suites...</option>
         </select>
+        <button class="btn btn-ghost btn-sm" id="btn-suite-settings" title="Suite settings">&#x2699;</button>
+        <button class="btn btn-outline btn-sm" id="btn-suite-create">+ Suite</button>
+        <div class="top-divider"></div>
+        <button class="btn btn-outline btn-sm" id="btn-connections">Connections</button>
       </div>
     </header>
 
@@ -156,6 +160,9 @@
         </div>
       </aside>
     </div>
+
+    <!-- Modals (injected dynamically) -->
+    <div id="modal-root"></div>
 
     <!-- Toast -->
     <div class="toast-container" id="toast-container"></div>

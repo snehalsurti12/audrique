@@ -1572,6 +1572,314 @@ body {
 .run-stat-skip { color: var(--text-muted); }
 .run-stat-total { color: var(--text-primary); }
 
+/* ── Modal System ───────────────────────────────────────────────────────── */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+  animation: fadeSlideIn 0.2s ease;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 700;
+}
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.modal-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+.modal-body {
+  padding: 20px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Top Bar Enhancements ───────────────────────────────────────────────── */
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.top-divider {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+/* ── Connection Card ────────────────────────────────────────────────────── */
+
+.connection-card {
+  padding: 14px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: 8px;
+  transition: all var(--transition);
+}
+.connection-card:hover {
+  border-color: var(--border-light);
+}
+
+.conn-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.conn-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.conn-customer {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: 8px;
+}
+.conn-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.conn-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.conn-detail {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.conn-detail-label {
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+
+/* ── Form Row (horizontal fields) ───────────────────────────────────────── */
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+/* ── Danger Zone ────────────────────────────────────────────────────────── */
+
+.danger-zone {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-md);
+  background: var(--danger-dim);
+}
+.danger-zone-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+.danger-zone p {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+/* ── Auth Status Badge ──────────────────────────────────────────────────── */
+
+.auth-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  margin-left: 8px;
+  vertical-align: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.auth-ok {
+  background: rgba(52, 211, 153, 0.15);
+  color: var(--success);
+}
+.auth-warn {
+  background: rgba(251, 191, 36, 0.15);
+  color: #f59e0b;
+}
+.auth-none {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+}
+
+/* ── Credential Form ───────────────────────────────────────────────────── */
+
+.form-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 18px 0 14px;
+}
+
+.backend-toggle {
+  display: flex;
+  gap: 10px;
+}
+.backend-option {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.backend-option:has(input:checked) {
+  border-color: var(--primary);
+  background: rgba(99, 102, 241, 0.08);
+}
+.backend-option input[type="radio"] {
+  display: none;
+}
+.backend-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.backend-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.cred-warning {
+  font-size: 11px;
+  color: #f59e0b;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  margin-bottom: 14px;
+}
+
+.cred-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 14px 0 8px;
+}
+
+.password-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.password-field .form-input {
+  padding-right: 36px;
+}
+.pw-toggle {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-muted);
+  padding: 4px;
+  line-height: 1;
+  opacity: 0.6;
+}
+.pw-toggle:hover {
+  opacity: 1;
+}
+
+.cred-collapsible {
+  margin-top: 8px;
+}
+.cred-collapsible > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.cred-collapsible > summary::before {
+  content: "\25B6";
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+.cred-collapsible[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.vault-test-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 4px;
+}
+.vault-test-ok {
+  font-size: 12px;
+  color: var(--success);
+  font-weight: 500;
+}
+.vault-test-fail {
+  font-size: 12px;
+  color: var(--danger);
+  font-weight: 500;
+}
+.vault-test-pending {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* ── Responsive ──────────────────────────────────────────────────────────── */
 
 @media (max-width: 1100px) {

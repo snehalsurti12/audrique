@@ -178,12 +178,16 @@ npm run studio
 ```
 
 The Studio provides:
+- **Suite management** — Create, rename, delete test suites from the UI
+- **Connection management** — Configure Salesforce + Connect + Twilio connections with vault-backed or direct credentials
+- **Vault integration** — HashiCorp Vault support with "Test Connection" verification, auto-populated secret references, and regulated mode enforcement
 - Step-by-step wizard with call setup, IVR routing, agent verification
 - Visual IVR flowchart builder that grows as you add menu levels
 - Skill-based routing configuration with auto-discovery from your org
 - Business hours, voicemail, and callback scenario builders
 - Live flow preview with Gherkin-style natural language
 - One-click JSON export and save to suite
+- **Suite ↔ Connection binding** — Each suite is associated with a connection set, ensuring tests run against the correct org
 
 ## Declarative Scenario Format (v2)
 
