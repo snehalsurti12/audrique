@@ -364,6 +364,88 @@ async function handleApi(req, res) {
     return true;
   }
 
+  // PUT /api/scenario/reorder — reorder scenarios in a suite
+  if (pathname === "/api/scenario/reorder" && req.method === "PUT") {
+    const body = await parseBody(req);
+    const { suiteFile, scenarioIds } = body;
+    if (!suiteFile || !Array.isArray(scenarioIds)) {
+      sendJson(res, 400, { error: "Missing suiteFile or scenarioIds array" });
+      return true;
+    }
+    const data = readJsonFile(suiteFile);
+    if (!data) {
+      sendJson(res, 404, { error: `Suite not found: ${suiteFile}` });
+      return true;
+    }
+    const byId = new Map(data.scenarios.map((s) => [s.id, s]));
+    const reordered = scenarioIds.map((id) => byId.get(id)).filter(Boolean);
+    // Append any scenarios not in the provided list (safety net)
+    for (const s of data.scenarios) {
+      if (!scenarioIds.includes(s.id)) reordered.push(s);
+    }
+    data.scenarios = reordered;
+    writeJsonFile(suiteFile, data);
+    sendJson(res, 200, { message: "Scenarios reordered", scenarioCount: data.scenarios.length });
+    return true;
+  }
+
+  // PUT /api/scenario/toggle — toggle a scenario's enabled state
+  if (pathname === "/api/scenario/toggle" && req.method === "PUT") {
+    const body = await parseBody(req);
+    const { suiteFile, scenarioId, enabled } = body;
+    if (!suiteFile || !scenarioId || typeof enabled !== "boolean") {
+      sendJson(res, 400, { error: "Missing suiteFile, scenarioId, or enabled (boolean)" });
+      return true;
+    }
+    const data = readJsonFile(suiteFile);
+    if (!data) {
+      sendJson(res, 404, { error: `Suite not found: ${suiteFile}` });
+      return true;
+    }
+    const scenario = data.scenarios.find((s) => s.id === scenarioId);
+    if (!scenario) {
+      sendJson(res, 404, { error: `Scenario "${scenarioId}" not found` });
+      return true;
+    }
+    scenario.enabled = enabled;
+    writeJsonFile(suiteFile, data);
+    sendJson(res, 200, { message: `Scenario "${scenarioId}" ${enabled ? "enabled" : "disabled"}` });
+    return true;
+  }
+
+  // POST /api/scenario/duplicate — clone a scenario with a new ID
+  if (pathname === "/api/scenario/duplicate" && req.method === "POST") {
+    const body = await parseBody(req);
+    const { suiteFile, scenarioId, newId } = body;
+    if (!suiteFile || !scenarioId || !newId) {
+      sendJson(res, 400, { error: "Missing suiteFile, scenarioId, or newId" });
+      return true;
+    }
+    const data = readJsonFile(suiteFile);
+    if (!data) {
+      sendJson(res, 404, { error: `Suite not found: ${suiteFile}` });
+      return true;
+    }
+    const source = data.scenarios.find((s) => s.id === scenarioId);
+    if (!source) {
+      sendJson(res, 404, { error: `Scenario "${scenarioId}" not found` });
+      return true;
+    }
+    if (data.scenarios.some((s) => s.id === newId)) {
+      sendJson(res, 409, { error: `Scenario "${newId}" already exists` });
+      return true;
+    }
+    const clone = JSON.parse(JSON.stringify(source));
+    clone.id = newId;
+    clone.description = (clone.description || "") + " (copy)";
+    // Insert right after the source
+    const idx = data.scenarios.indexOf(source);
+    data.scenarios.splice(idx + 1, 0, clone);
+    writeJsonFile(suiteFile, data);
+    sendJson(res, 200, { message: `Duplicated "${scenarioId}" as "${newId}"`, scenarioCount: data.scenarios.length });
+    return true;
+  }
+
   // GET /api/vocabulary — get cached org vocabulary for a profile
   if (pathname === "/api/vocabulary" && req.method === "GET") {
     const params = new URLSearchParams(req.url.split("?")[1] || "");

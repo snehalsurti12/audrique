@@ -146,6 +146,8 @@ function bindGlobalEvents() {
   document.getElementById("btn-suite-settings").addEventListener("click", openSuiteSettingsModal);
   document.getElementById("btn-suite-create").addEventListener("click", openCreateSuiteModal);
   document.getElementById("btn-connections").addEventListener("click", openConnectionsModal);
+  document.getElementById("btn-export-suite").addEventListener("click", exportSuite);
+  document.getElementById("btn-import-suite").addEventListener("click", importSuite);
 
   document.getElementById("btn-cancel-edit").addEventListener("click", () => {
     state.editingScenarioId = null;
@@ -188,7 +190,7 @@ function renderScenarioList() {
   }
 
   list.innerHTML = scenarios
-    .map((s) => {
+    .map((s, idx) => {
       const badges = [];
       const steps = s.steps || [];
       badges.push(`<span class="badge badge-step">${steps.length} steps</span>`);
@@ -233,10 +235,13 @@ function renderScenarioList() {
       // Build a short NL tooltip
       const nlTip = scenarioToNaturalLanguage(s).replace(/"/g, "&quot;").replace(/\n/g, "&#10;");
       return `
-        <div class="scenario-card ${isActive ? "active" : ""} ${isDisabled ? "disabled" : ""}" data-id="${s.id}" title="${nlTip}">
+        <div class="scenario-card ${isActive ? "active" : ""} ${isDisabled ? "disabled" : ""}" data-id="${s.id}" data-idx="${idx}" draggable="true" title="${nlTip}">
           <div class="sc-top-row">
+            <span class="sc-drag-handle" title="Drag to reorder">&#x2630;</span>
             <div class="sc-id">${s.id}</div>
             <div class="sc-actions">
+              <button class="sc-btn sc-btn-toggle" data-action="toggle" data-id="${s.id}" title="${isDisabled ? "Enable" : "Disable"} scenario">${isDisabled ? "&#x25CB;" : "&#x25CF;"}</button>
+              <button class="sc-btn sc-btn-dup" data-action="duplicate" data-id="${s.id}" title="Duplicate scenario">&#x2398;</button>
               <button class="sc-btn sc-btn-edit" data-action="edit" data-id="${s.id}" title="Edit scenario">&#x270E;</button>
               <button class="sc-btn sc-btn-delete" data-action="delete" data-id="${s.id}" title="Delete scenario">&#x2715;</button>
             </div>
@@ -248,13 +253,58 @@ function renderScenarioList() {
     })
     .join("");
 
+  // Drag-and-drop reordering
+  initScenarioDragDrop(list);
+
   // Click anywhere on card -> edit
   list.querySelectorAll(".scenario-card").forEach((card) => {
     card.addEventListener("click", (e) => {
-      if (e.target.closest('[data-action="delete"]')) return;
+      if (e.target.closest('[data-action]')) return;
+      if (e.target.closest('.sc-drag-handle')) return;
       const id = card.dataset.id;
       const scenario = scenarios.find((s) => s.id === id);
       if (scenario) startEditScenario(scenario);
+    });
+  });
+
+  // Toggle buttons
+  list.querySelectorAll('[data-action="toggle"]').forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const scenario = scenarios.find((s) => s.id === id);
+      if (!scenario) return;
+      const newEnabled = scenario.enabled === false ? true : false;
+      try {
+        await api("/scenario/toggle", {
+          method: "PUT",
+          body: JSON.stringify({ suiteFile: state.currentSuiteFile, scenarioId: id, enabled: newEnabled }),
+        });
+        toast(`${id} ${newEnabled ? "enabled" : "disabled"}`, "success");
+        await loadSuite(state.currentSuiteFile);
+      } catch (err) {
+        toast("Toggle failed", "error");
+      }
+    });
+  });
+
+  // Duplicate buttons
+  list.querySelectorAll('[data-action="duplicate"]').forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const newId = prompt(`New scenario ID (copy of "${id}"):`, `${id}-copy`);
+      if (!newId || !newId.trim()) return;
+      try {
+        const result = await api("/scenario/duplicate", {
+          method: "POST",
+          body: JSON.stringify({ suiteFile: state.currentSuiteFile, scenarioId: id, newId: newId.trim() }),
+        });
+        toast(result.message || "Duplicated!", "success");
+        await loadSuite(state.currentSuiteFile);
+      } catch (err) {
+        toast("Duplicate failed", "error");
+      }
     });
   });
 
@@ -277,6 +327,68 @@ function renderScenarioList() {
         await loadSuite(state.currentSuiteFile);
       } catch (err) {
         toast("Delete failed", "error");
+      }
+    });
+  });
+}
+
+// ── Drag-and-Drop Reordering ────────────────────────────────────────────────
+
+function initScenarioDragDrop(list) {
+  let draggedCard = null;
+
+  list.querySelectorAll(".scenario-card").forEach((card) => {
+    card.addEventListener("dragstart", (e) => {
+      draggedCard = card;
+      card.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", card.dataset.id);
+    });
+
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging");
+      list.querySelectorAll(".scenario-card").forEach((c) => c.classList.remove("drag-over"));
+      draggedCard = null;
+    });
+
+    card.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (card !== draggedCard) {
+        card.classList.add("drag-over");
+      }
+    });
+
+    card.addEventListener("dragleave", () => {
+      card.classList.remove("drag-over");
+    });
+
+    card.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      card.classList.remove("drag-over");
+      if (!draggedCard || card === draggedCard) return;
+
+      // Reorder in DOM
+      const allCards = [...list.querySelectorAll(".scenario-card")];
+      const fromIdx = allCards.indexOf(draggedCard);
+      const toIdx = allCards.indexOf(card);
+      if (fromIdx < toIdx) {
+        card.after(draggedCard);
+      } else {
+        card.before(draggedCard);
+      }
+
+      // Persist new order
+      const newOrder = [...list.querySelectorAll(".scenario-card")].map((c) => c.dataset.id);
+      try {
+        await api("/scenario/reorder", {
+          method: "PUT",
+          body: JSON.stringify({ suiteFile: state.currentSuiteFile, scenarioIds: newOrder }),
+        });
+        await loadSuite(state.currentSuiteFile);
+      } catch (err) {
+        toast("Reorder failed", "error");
+        await loadSuite(state.currentSuiteFile);
       }
     });
   });
@@ -3194,6 +3306,84 @@ async function deleteSuite() {
   showLanding();
   renderScenarioList();
   await loadSuites();
+}
+
+// ── Suite Import / Export ────────────────────────────────────────────────────
+
+function exportSuite() {
+  if (!state.currentSuite || !state.currentSuiteFile) {
+    toast("No suite loaded", "error");
+    return;
+  }
+  const data = JSON.stringify(state.currentSuite, null, 2);
+  const blob = new Blob([data], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const name = state.currentSuite.name || "suite";
+  a.download = `${name.replace(/[^a-z0-9]/gi, "-").toLowerCase()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast("Suite exported", "success");
+}
+
+function importSuite() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".json";
+  input.addEventListener("change", async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data.scenarios || !Array.isArray(data.scenarios)) {
+        toast("Invalid suite file: missing scenarios array", "error");
+        return;
+      }
+      // Ask for suite name
+      const suiteName = prompt("Suite name:", data.name || file.name.replace(/\.json$/, ""));
+      if (!suiteName) return;
+      data.name = suiteName;
+      if (!data.version) data.version = 2;
+      // Create via API
+      const slug = suiteName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+      const suiteFile = `scenarios/e2e/${slug}.json`;
+      const result = await api("/suite", {
+        method: "POST",
+        body: JSON.stringify({ name: suiteName, file: suiteFile }),
+      });
+      if (result.error) {
+        toast(result.error, "error");
+        return;
+      }
+      // Now write the full suite data (with scenarios) by saving each scenario
+      for (const scenario of data.scenarios) {
+        await api("/scenario", {
+          method: "POST",
+          body: JSON.stringify({ scenario, suiteFile }),
+        });
+      }
+      // Copy over defaults and settings
+      if (data.defaults || data.stopOnFailure !== undefined) {
+        const suite = await api(`/suite?file=${encodeURIComponent(suiteFile)}`);
+        if (data.defaults) suite.defaults = data.defaults;
+        if (data.stopOnFailure !== undefined) suite.stopOnFailure = data.stopOnFailure;
+        await api("/suite", {
+          method: "PUT",
+          body: JSON.stringify({ file: suiteFile, name: suiteName }),
+        });
+      }
+      toast(`Imported "${suiteName}" with ${data.scenarios.length} scenarios`, "success");
+      await loadSuites();
+      await loadSuite(suiteFile);
+    } catch (err) {
+      toast("Import failed: " + (err.message || "invalid file"), "error");
+    }
+  });
+  input.click();
 }
 
 // ── Connection Set Management ────────────────────────────────────────────────

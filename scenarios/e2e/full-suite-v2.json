@@ -48,7 +48,8 @@
           "type": "e2e.screen_pop_detected",
           "equals": true
         }
-      ]
+      ],
+      "enabled": true
     },
     {
       "id": "ivr-support-queue-branch",
