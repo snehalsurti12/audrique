@@ -12,6 +12,7 @@
 
 const state = {
   suites: [],
+  profiles: [],
   currentSuiteFile: "",
   currentSuite: null,
   editingScenarioId: null,
@@ -83,6 +84,7 @@ async function api(endpoint, opts = {}) {
 // ── Init ────────────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
+  await loadProfiles();
   await loadSuites();
   bindGlobalEvents();
 });
@@ -96,7 +98,9 @@ async function loadSuites() {
   state.suites.forEach((s) => {
     const opt = document.createElement("option");
     opt.value = s.file;
-    opt.textContent = `${s.name} (${s.scenarioCount} scenarios)`;
+    const connLabel = getProfileLabel(s.connectionSetId);
+    const connSuffix = connLabel ? ` \u2014 ${connLabel}` : "";
+    opt.textContent = `${s.name}${connSuffix} (${s.scenarioCount} scenarios)`;
     sel.appendChild(opt);
   });
 
@@ -137,6 +141,11 @@ function bindGlobalEvents() {
     const first = state.currentSuite.scenarios[0];
     startEditScenario(first);
   });
+
+  // Suite & connection management
+  document.getElementById("btn-suite-settings").addEventListener("click", openSuiteSettingsModal);
+  document.getElementById("btn-suite-create").addEventListener("click", openCreateSuiteModal);
+  document.getElementById("btn-connections").addEventListener("click", openConnectionsModal);
 
   document.getElementById("btn-cancel-edit").addEventListener("click", () => {
     state.editingScenarioId = null;
@@ -2806,12 +2815,14 @@ async function startRun(dryRun) {
 
   // Kick off the run
   try {
+    const runBody = { suiteFile: state.currentSuiteFile, dryRun };
+    // Pass connection set instance if suite has one
+    if (state.currentSuite?.connectionSetId) {
+      runBody.instance = state.currentSuite.connectionSetId;
+    }
     const res = await api("/run", {
       method: "POST",
-      body: JSON.stringify({
-        suiteFile: state.currentSuiteFile,
-        dryRun,
-      }),
+      body: JSON.stringify(runBody),
     });
 
     if (res.error) {
@@ -3007,4 +3018,655 @@ function formatRunTime(ms) {
 
 function clearRunTerminal() {
   document.getElementById("run-terminal-body").innerHTML = "";
+}
+
+// ── Profiles ─────────────────────────────────────────────────────────────────
+
+async function loadProfiles() {
+  const data = await api("/profiles");
+  state.profiles = data?.profiles || [];
+}
+
+function getProfileLabel(id) {
+  if (!id) return "";
+  const p = state.profiles.find((pr) => pr.id === id);
+  return p ? p.label : "";
+}
+
+function profileOptionsHtml(selectedId) {
+  let html = '<option value="">— None —</option>';
+  for (const p of state.profiles) {
+    const sel = p.id === selectedId ? " selected" : "";
+    html += `<option value="${esc(p.id)}"${sel}>${esc(p.label)}</option>`;
+  }
+  return html;
+}
+
+// ── Modal System ─────────────────────────────────────────────────────────────
+
+function openModal(title, bodyHtml, footerHtml) {
+  closeModal();
+  const root = document.getElementById("modal-root");
+  root.innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>${title}</h3>
+          <button class="modal-close" id="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-body">${bodyHtml}</div>
+        ${footerHtml ? `<div class="modal-footer">${footerHtml}</div>` : ""}
+      </div>
+    </div>
+  `;
+  document.getElementById("modal-close-btn").addEventListener("click", closeModal);
+  document.getElementById("modal-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "modal-backdrop") closeModal();
+  });
+  document.addEventListener("keydown", modalEscHandler);
+}
+
+function closeModal() {
+  document.getElementById("modal-root").innerHTML = "";
+  document.removeEventListener("keydown", modalEscHandler);
+}
+
+function modalEscHandler(e) {
+  if (e.key === "Escape") closeModal();
+}
+
+// ── Suite Management ─────────────────────────────────────────────────────────
+
+function openCreateSuiteModal() {
+  const body = `
+    <div class="form-group">
+      <label class="form-label">Suite Name</label>
+      <input type="text" class="form-input" id="modal-suite-name" placeholder="e.g., Regression Suite" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Connection Set <span class="optional">(optional)</span></label>
+      <select class="form-select" id="modal-suite-conn">${profileOptionsHtml("")}</select>
+      <span class="form-hint">Associate this suite with a specific Salesforce + Connect org</span>
+    </div>
+  `;
+  const footer = `
+    <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="modal-suite-create-btn">Create Suite</button>
+  `;
+  openModal("Create New Suite", body, footer);
+  document.getElementById("modal-suite-create-btn").addEventListener("click", createSuite);
+  document.getElementById("modal-suite-name").focus();
+}
+
+async function createSuite() {
+  const name = document.getElementById("modal-suite-name").value.trim();
+  const connectionSetId = document.getElementById("modal-suite-conn").value || undefined;
+  if (!name) {
+    toast("Suite name is required", "error");
+    return;
+  }
+  const res = await api("/suite", {
+    method: "POST",
+    body: JSON.stringify({ name, connectionSetId }),
+  });
+  if (res.error) {
+    toast(res.error, "error");
+    return;
+  }
+  closeModal();
+  toast(`Suite "${name}" created`, "success");
+  await loadSuites();
+  // Select the new suite
+  const sel = document.getElementById("suite-selector");
+  sel.value = res.file;
+  await loadSuite(res.file);
+}
+
+function openSuiteSettingsModal() {
+  if (!state.currentSuiteFile || !state.currentSuite) {
+    toast("Select a suite first", "error");
+    return;
+  }
+  const suite = state.currentSuite;
+  const body = `
+    <div class="form-group">
+      <label class="form-label">Suite Name</label>
+      <input type="text" class="form-input" id="modal-suite-name" value="${esc(suite.name || "")}" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Connection Set</label>
+      <select class="form-select" id="modal-suite-conn">${profileOptionsHtml(suite.connectionSetId || "")}</select>
+      <span class="form-hint">Tests in this suite will run against the selected connection</span>
+    </div>
+    <div class="danger-zone">
+      <div class="danger-zone-title">Danger Zone</div>
+      <p>Permanently delete this suite and all its scenarios.</p>
+      <button class="btn btn-danger btn-sm" id="modal-suite-delete-btn">Delete Suite</button>
+    </div>
+  `;
+  const footer = `
+    <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" id="modal-suite-save-btn">Save Changes</button>
+  `;
+  openModal("Suite Settings", body, footer);
+  document.getElementById("modal-suite-save-btn").addEventListener("click", updateSuite);
+  document.getElementById("modal-suite-delete-btn").addEventListener("click", deleteSuite);
+}
+
+async function updateSuite() {
+  const name = document.getElementById("modal-suite-name").value.trim();
+  const connectionSetId = document.getElementById("modal-suite-conn").value || "";
+  if (!name) {
+    toast("Suite name is required", "error");
+    return;
+  }
+  const res = await api("/suite", {
+    method: "PUT",
+    body: JSON.stringify({ file: state.currentSuiteFile, name, connectionSetId }),
+  });
+  if (res.error) {
+    toast(res.error, "error");
+    return;
+  }
+  closeModal();
+  toast("Suite updated", "success");
+  await loadSuites();
+  const sel = document.getElementById("suite-selector");
+  sel.value = state.currentSuiteFile;
+  await loadSuite(state.currentSuiteFile);
+}
+
+async function deleteSuite() {
+  const name = state.currentSuite?.name || "this suite";
+  if (!confirm(`Are you sure you want to delete "${name}"? This cannot be undone.`)) return;
+  const res = await api("/suite", {
+    method: "DELETE",
+    body: JSON.stringify({ file: state.currentSuiteFile }),
+  });
+  if (res.error) {
+    toast(res.error, "error");
+    return;
+  }
+  closeModal();
+  toast(`Suite "${name}" deleted`, "success");
+  state.currentSuiteFile = "";
+  state.currentSuite = null;
+  showLanding();
+  renderScenarioList();
+  await loadSuites();
+}
+
+// ── Connection Set Management ────────────────────────────────────────────────
+
+function openConnectionsModal() {
+  renderConnectionList();
+}
+
+function authStatusBadge(profile) {
+  const status = profile._authStatus || "missing";
+  const backend = profile._authBackend || "env";
+  if (status === "configured") {
+    return `<span class="auth-badge auth-ok">${backend === "vault" ? "Vault" : "Configured"}</span>`;
+  }
+  if (status === "incomplete") {
+    return `<span class="auth-badge auth-warn">Needs Credentials</span>`;
+  }
+  return `<span class="auth-badge auth-none">Not Set Up</span>`;
+}
+
+function renderConnectionList() {
+  let cardsHtml = "";
+  if (state.profiles.length === 0) {
+    cardsHtml = '<div class="empty-state">No connections configured yet.</div>';
+  } else {
+    cardsHtml = state.profiles
+      .map(
+        (p) => `
+      <div class="connection-card">
+        <div class="conn-top-row">
+          <div>
+            <span class="conn-label">${esc(p.label)}</span>
+            ${p.customer ? `<span class="conn-customer">${esc(p.customer)}</span>` : ""}
+            ${authStatusBadge(p)}
+          </div>
+          <div class="conn-actions">
+            <button class="sc-btn sc-btn-edit" data-conn-edit="${esc(p.id)}" title="Edit">&#x270E;</button>
+            <button class="sc-btn sc-btn-delete" data-conn-delete="${esc(p.id)}" title="Delete">&#x2715;</button>
+          </div>
+        </div>
+        <div class="conn-details">
+          <div class="conn-detail"><span class="conn-detail-label">SF:</span> ${esc(p.salesforce?.loginUrl || "\u2014")}</div>
+          <div class="conn-detail"><span class="conn-detail-label">Connect:</span> ${esc(p.connect?.instanceAlias || "\u2014")}</div>
+          <div class="conn-detail"><span class="conn-detail-label">Region:</span> ${esc(p.connect?.region || "\u2014")}</div>
+        </div>
+      </div>
+    `
+      )
+      .join("");
+  }
+
+  const body = `
+    ${cardsHtml}
+    <div style="margin-top: 12px;">
+      <button class="btn btn-outline" id="modal-conn-new-btn">+ New Connection</button>
+    </div>
+  `;
+  openModal("Connection Sets", body, "");
+
+  document.getElementById("modal-conn-new-btn").addEventListener("click", () => openConnectionForm(null));
+  document.querySelectorAll("[data-conn-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const p = state.profiles.find((pr) => pr.id === btn.dataset.connEdit);
+      if (p) openConnectionForm(p);
+    });
+  });
+  document.querySelectorAll("[data-conn-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteConnection(btn.dataset.connDelete));
+  });
+}
+
+const AWS_REGIONS = [
+  "us-east-1", "us-west-2", "eu-west-2", "eu-central-1",
+  "ap-southeast-1", "ap-southeast-2", "ap-northeast-1", "ap-northeast-2",
+  "ca-central-1", "af-south-1",
+];
+
+async function openConnectionForm(existing) {
+  const isEdit = !!existing;
+  const title = isEdit ? `Edit: ${existing.label}` : "New Connection";
+
+  // Load existing .env values if editing
+  let envData = null;
+  let currentBackend = "env";
+  if (isEdit) {
+    envData = await api(`/profile/env?id=${encodeURIComponent(existing.id)}`);
+    if (envData?.backend) currentBackend = envData.backend;
+  }
+  const env = envData?.env || {};
+
+  const regionOptions = AWS_REGIONS.map(
+    (r) => `<option value="${r}"${r === (existing?.connect?.region || "us-west-2") ? " selected" : ""}>${r}</option>`
+  ).join("");
+
+  const body = `
+    <div class="form-group">
+      <label class="form-label">Label</label>
+      <input type="text" class="form-input" id="modal-conn-label" value="${esc(existing?.label || "")}" placeholder="e.g., Production Org" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Customer <span class="optional">(optional)</span></label>
+      <input type="text" class="form-input" id="modal-conn-customer" value="${esc(existing?.customer || "")}" placeholder="e.g., Acme Corp" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Salesforce Login URL</label>
+      <select class="form-select" id="modal-conn-sf-login">
+        <option value="https://login.salesforce.com"${existing?.salesforce?.loginUrl === "https://login.salesforce.com" ? " selected" : ""}>login.salesforce.com (Production)</option>
+        <option value="https://test.salesforce.com"${existing?.salesforce?.loginUrl === "https://test.salesforce.com" ? " selected" : ""}>test.salesforce.com (Sandbox)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">SF App Name</label>
+      <input type="text" class="form-input" id="modal-conn-sf-app" value="${esc(existing?.salesforce?.appName || "Service Console")}" />
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">Connect Instance Alias</label>
+        <input type="text" class="form-input" id="modal-conn-alias" value="${esc(existing?.connect?.instanceAlias || "")}" placeholder="myinstance.my.connect.aws" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Connect Region</label>
+        <select class="form-select" id="modal-conn-region">${regionOptions}</select>
+      </div>
+    </div>
+
+    <hr class="form-divider" />
+
+    <div class="form-group">
+      <label class="form-label">Secrets Backend</label>
+      <div class="backend-toggle">
+        <label class="backend-option">
+          <input type="radio" name="secrets-backend" value="env" ${currentBackend === "env" ? "checked" : ""} />
+          <span class="backend-label">Direct (env)</span>
+          <span class="backend-desc">Credentials stored in .env file</span>
+        </label>
+        <label class="backend-option">
+          <input type="radio" name="secrets-backend" value="vault" ${currentBackend === "vault" ? "checked" : ""} />
+          <span class="backend-label">HashiCorp Vault</span>
+          <span class="backend-desc">References resolved at runtime</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="cred-warning" id="cred-warning-env" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
+      Credentials will be stored in plaintext on disk. Use Vault for shared or production environments.
+    </div>
+
+    <!-- env mode fields -->
+    <div id="cred-env-fields" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
+      <h4 class="cred-section-title">Salesforce Credentials</h4>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">SF Username</label>
+          <input type="text" class="form-input" id="modal-cred-sf-user" value="${esc(env.SF_USERNAME || "")}" placeholder="admin@myorg.com" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">SF Password</label>
+          <div class="password-field">
+            <input type="password" class="form-input" id="modal-cred-sf-pass" value="${esc(env.SF_PASSWORD || "")}" placeholder="Password" />
+            <button type="button" class="pw-toggle" data-target="modal-cred-sf-pass" title="Show/hide">&#x1F441;</button>
+          </div>
+        </div>
+      </div>
+
+      <h4 class="cred-section-title">AWS / Amazon Connect</h4>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">AWS Username</label>
+          <input type="text" class="form-input" id="modal-cred-aws-user" value="${esc(env.AWS_USERNAME || "")}" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">AWS Password</label>
+          <div class="password-field">
+            <input type="password" class="form-input" id="modal-cred-aws-pass" value="${esc(env.AWS_PASSWORD || "")}" placeholder="Password" />
+            <button type="button" class="pw-toggle" data-target="modal-cred-aws-pass" title="Show/hide">&#x1F441;</button>
+          </div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">AWS Account ID</label>
+        <input type="text" class="form-input" id="modal-cred-aws-account" value="${esc(env.AWS_ACCOUNT_ID || "")}" placeholder="123456789012" />
+      </div>
+
+      <details class="cred-collapsible">
+        <summary class="cred-section-title">Twilio (optional)</summary>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Account SID</label>
+            <input type="text" class="form-input" id="modal-cred-twilio-sid" value="${esc(env.TWILIO_ACCOUNT_SID || "")}" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Auth Token</label>
+            <div class="password-field">
+              <input type="password" class="form-input" id="modal-cred-twilio-token" value="${esc(env.TWILIO_AUTH_TOKEN || "")}" />
+              <button type="button" class="pw-toggle" data-target="modal-cred-twilio-token" title="Show/hide">&#x1F441;</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">From Number</label>
+            <input type="text" class="form-input" id="modal-cred-twilio-from" value="${esc(env.TWILIO_FROM_NUMBER || "")}" placeholder="+1234567890" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Connect Entrypoint</label>
+            <input type="text" class="form-input" id="modal-cred-connect-entry" value="${esc(env.CONNECT_ENTRYPOINT_NUMBER || "")}" placeholder="+1234567890" />
+          </div>
+        </div>
+      </details>
+    </div>
+
+    <!-- vault mode fields -->
+    <div id="cred-vault-fields" ${currentBackend !== "vault" ? 'style="display:none"' : ""}>
+      <h4 class="cred-section-title">Vault Configuration</h4>
+      <div class="form-group">
+        <label class="form-label">Vault Address</label>
+        <input type="text" class="form-input" id="modal-vault-addr" value="${esc(env.VAULT_ADDR || "")}" placeholder="https://vault.internal:8200" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Vault Token</label>
+        <div class="password-field">
+          <input type="password" class="form-input" id="modal-vault-token" value="${esc(env.VAULT_TOKEN || "")}" placeholder="s.xxxxx" />
+          <button type="button" class="pw-toggle" data-target="modal-vault-token" title="Show/hide">&#x1F441;</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Base Path <span class="optional">(auto-populates refs below)</span></label>
+        <input type="text" class="form-input" id="modal-vault-base" value="" placeholder="kv/data/audrique/my-org" />
+      </div>
+      <div class="vault-test-row">
+        <button class="btn btn-outline btn-sm" id="modal-vault-test-btn">Test Vault Connection</button>
+        <span id="vault-test-result"></span>
+      </div>
+
+      <h4 class="cred-section-title">Secret References</h4>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">SF Username Ref</label>
+          <input type="text" class="form-input vault-ref" id="modal-vault-sf-user" value="${esc(env.SF_USERNAME_REF || "")}" placeholder="kv/data/org#sf_username" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">SF Password Ref</label>
+          <input type="text" class="form-input vault-ref" id="modal-vault-sf-pass" value="${esc(env.SF_PASSWORD_REF || "")}" placeholder="kv/data/org#sf_password" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">AWS Username Ref</label>
+          <input type="text" class="form-input vault-ref" id="modal-vault-aws-user" value="${esc(env.AWS_USERNAME_REF || "")}" placeholder="kv/data/org#aws_username" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">AWS Password Ref</label>
+          <input type="text" class="form-input vault-ref" id="modal-vault-aws-pass" value="${esc(env.AWS_PASSWORD_REF || "")}" placeholder="kv/data/org#aws_password" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">AWS Account ID Ref</label>
+        <input type="text" class="form-input vault-ref" id="modal-vault-aws-account" value="${esc(env.AWS_ACCOUNT_ID_REF || "")}" placeholder="kv/data/org#aws_account_id" />
+      </div>
+
+      <details class="cred-collapsible">
+        <summary class="cred-section-title">Twilio Refs (optional)</summary>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Account SID Ref</label>
+            <input type="text" class="form-input vault-ref" id="modal-vault-twilio-sid" value="${esc(env.TWILIO_ACCOUNT_SID_REF || "")}" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Auth Token Ref</label>
+            <input type="text" class="form-input vault-ref" id="modal-vault-twilio-token" value="${esc(env.TWILIO_AUTH_TOKEN_REF || "")}" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">From Number</label>
+            <input type="text" class="form-input" id="modal-vault-twilio-from" value="${esc(env.TWILIO_FROM_NUMBER || "")}" placeholder="+1234567890" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Connect Entrypoint</label>
+            <input type="text" class="form-input" id="modal-vault-connect-entry" value="${esc(env.CONNECT_ENTRYPOINT_NUMBER || "")}" placeholder="+1234567890" />
+          </div>
+        </div>
+      </details>
+    </div>
+  `;
+
+  const footer = `
+    <button class="btn btn-outline" id="modal-conn-back-btn">Back</button>
+    <button class="btn btn-primary" id="modal-conn-save-btn">${isEdit ? "Save Changes" : "Create Connection"}</button>
+  `;
+  openModal(title, body, footer);
+
+  // Backend toggle handler
+  document.querySelectorAll('input[name="secrets-backend"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      const isVault = radio.value === "vault";
+      document.getElementById("cred-env-fields").style.display = isVault ? "none" : "";
+      document.getElementById("cred-vault-fields").style.display = isVault ? "" : "none";
+      document.getElementById("cred-warning-env").style.display = isVault ? "none" : "";
+    });
+  });
+
+  // Password reveal toggles
+  document.querySelectorAll(".pw-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const input = document.getElementById(btn.dataset.target);
+      if (input) input.type = input.type === "password" ? "text" : "password";
+    });
+  });
+
+  // Vault base path auto-populate
+  const baseInput = document.getElementById("modal-vault-base");
+  if (baseInput) {
+    baseInput.addEventListener("input", () => {
+      const base = baseInput.value.trim();
+      if (!base) return;
+      const refFields = {
+        "modal-vault-sf-user": "sf_username",
+        "modal-vault-sf-pass": "sf_password",
+        "modal-vault-aws-user": "aws_username",
+        "modal-vault-aws-pass": "aws_password",
+        "modal-vault-aws-account": "aws_account_id",
+        "modal-vault-twilio-sid": "twilio_account_sid",
+        "modal-vault-twilio-token": "twilio_auth_token",
+      };
+      for (const [id, field] of Object.entries(refFields)) {
+        const el = document.getElementById(id);
+        if (el && !el.dataset.userEdited) el.value = `${base}#${field}`;
+      }
+    });
+    // Track manual edits to vault ref fields
+    document.querySelectorAll(".vault-ref").forEach((input) => {
+      input.addEventListener("input", () => { input.dataset.userEdited = "true"; });
+    });
+  }
+
+  // Vault test button
+  const testBtn = document.getElementById("modal-vault-test-btn");
+  if (testBtn) {
+    testBtn.addEventListener("click", async () => {
+      const addr = document.getElementById("modal-vault-addr").value.trim();
+      const token = document.getElementById("modal-vault-token").value.trim();
+      const resultEl = document.getElementById("vault-test-result");
+      if (!addr || !token) {
+        resultEl.className = "vault-test-fail";
+        resultEl.textContent = "Address and token required";
+        return;
+      }
+      resultEl.className = "vault-test-pending";
+      resultEl.textContent = "Testing...";
+      const testRef = document.getElementById("modal-vault-sf-pass").value.trim();
+      const res = await api("/vault/test", {
+        method: "POST",
+        body: JSON.stringify({ vaultAddr: addr, vaultToken: token, testRef: testRef || undefined }),
+      });
+      if (res.success) {
+        let msg = `Connected (v${res.version})`;
+        if (res.secretAccessible === true) msg += " \u2014 secret accessible";
+        else if (res.secretAccessible === false) msg += " \u2014 secret NOT found";
+        resultEl.className = "vault-test-ok";
+        resultEl.textContent = msg;
+      } else {
+        resultEl.className = "vault-test-fail";
+        resultEl.textContent = res.error || "Connection failed";
+      }
+    });
+  }
+
+  document.getElementById("modal-conn-back-btn").addEventListener("click", () => {
+    renderConnectionList();
+  });
+  document.getElementById("modal-conn-save-btn").addEventListener("click", () => saveConnection(existing?.id));
+  if (!isEdit) document.getElementById("modal-conn-label").focus();
+}
+
+async function saveConnection(existingId) {
+  const label = document.getElementById("modal-conn-label").value.trim();
+  const customer = document.getElementById("modal-conn-customer").value.trim();
+  const loginUrl = document.getElementById("modal-conn-sf-login").value;
+  const appName = document.getElementById("modal-conn-sf-app").value.trim();
+  const instanceAlias = document.getElementById("modal-conn-alias").value.trim();
+  const region = document.getElementById("modal-conn-region").value;
+
+  if (!label) {
+    toast("Connection label is required", "error");
+    return;
+  }
+
+  // Save profile metadata
+  const payload = {
+    label,
+    customer,
+    salesforce: { loginUrl, appName },
+    connect: { instanceAlias, region },
+  };
+
+  let profileRes;
+  if (existingId) {
+    payload.id = existingId;
+    profileRes = await api("/profile", { method: "PUT", body: JSON.stringify(payload) });
+  } else {
+    profileRes = await api("/profile", { method: "POST", body: JSON.stringify(payload) });
+  }
+
+  if (profileRes.error) {
+    toast(profileRes.error, "error");
+    return;
+  }
+
+  // Save credentials to .env file
+  const profileId = existingId || profileRes.id;
+  const backend = document.querySelector('input[name="secrets-backend"]:checked')?.value || "env";
+  const val = (id) => document.getElementById(id)?.value?.trim() || "";
+
+  const credentials = { secretsBackend: backend };
+
+  if (backend === "vault") {
+    credentials.vaultAddr = val("modal-vault-addr");
+    credentials.vaultToken = val("modal-vault-token");
+    credentials.sfUsernameRef = val("modal-vault-sf-user");
+    credentials.sfPasswordRef = val("modal-vault-sf-pass");
+    credentials.awsUsernameRef = val("modal-vault-aws-user");
+    credentials.awsPasswordRef = val("modal-vault-aws-pass");
+    credentials.awsAccountIdRef = val("modal-vault-aws-account");
+    credentials.twilioSidRef = val("modal-vault-twilio-sid");
+    credentials.twilioTokenRef = val("modal-vault-twilio-token");
+    credentials.twilioFromNumber = val("modal-vault-twilio-from");
+    credentials.connectEntrypoint = val("modal-vault-connect-entry");
+  } else {
+    credentials.sfUsername = val("modal-cred-sf-user");
+    // Only send password if not masked placeholder
+    const sfPass = val("modal-cred-sf-pass");
+    if (sfPass && !sfPass.startsWith("\u2022")) credentials.sfPassword = sfPass;
+    credentials.awsUsername = val("modal-cred-aws-user");
+    const awsPass = val("modal-cred-aws-pass");
+    if (awsPass && !awsPass.startsWith("\u2022")) credentials.awsPassword = awsPass;
+    credentials.awsAccountId = val("modal-cred-aws-account");
+    credentials.twilioSid = val("modal-cred-twilio-sid");
+    const twilioToken = val("modal-cred-twilio-token");
+    if (twilioToken && !twilioToken.startsWith("\u2022")) credentials.twilioToken = twilioToken;
+    credentials.twilioFromNumber = val("modal-cred-twilio-from");
+    credentials.connectEntrypoint = val("modal-cred-connect-entry");
+  }
+
+  const envRes = await api("/profile/env", {
+    method: "POST",
+    body: JSON.stringify({ id: profileId, credentials }),
+  });
+
+  if (envRes.error) {
+    toast(`Profile saved but credentials failed: ${envRes.error}`, "error");
+  } else {
+    toast(existingId ? "Connection updated" : `Connection "${label}" created`, "success");
+  }
+
+  await loadProfiles();
+  renderConnectionList();
+}
+
+async function deleteConnection(id) {
+  const profile = state.profiles.find((p) => p.id === id);
+  const name = profile?.label || id;
+  if (!confirm(`Delete connection "${name}"? This cannot be undone.`)) return;
+
+  const res = await api("/profile", {
+    method: "DELETE",
+    body: JSON.stringify({ id }),
+  });
+  if (res.error) {
+    toast(res.error, "error");
+    return;
+  }
+  toast(`Connection "${name}" deleted`, "success");
+  await loadProfiles();
+  renderConnectionList();
 }
