@@ -1,0 +1,59 @@
+version: "3.8"
+
+services:
+  audrique:
+    build: .
+    ports:
+      - "4200:4200"
+    volumes:
+      # Persist test artifacts, auth sessions, and suite files
+      - ./test-results:/app/test-results
+      - ./playwright-report:/app/playwright-report
+      - ./.auth:/app/.auth
+      - ./scenarios:/app/scenarios
+      - ./instances:/app/instances
+    env_file:
+      - .env
+    environment:
+      - PW_HEADLESS=true
+      - PW_USE_FAKE_MEDIA=true
+    # Required for Chromium sandboxing in Docker
+    security_opt:
+      - seccomp=unconfined
+    # Shared memory for Chromium (default 64MB is too small)
+    shm_size: "1gb"
+
+  # Run a test suite instead of Studio
+  # Usage: docker compose run --rm test
+  test:
+    build: .
+    command: ["node", "bin/audrique.mjs", "run"]
+    volumes:
+      - ./test-results:/app/test-results
+      - ./playwright-report:/app/playwright-report
+      - ./.auth:/app/.auth
+      - ./scenarios:/app/scenarios
+      - ./instances:/app/instances
+    env_file:
+      - .env
+    environment:
+      - PW_HEADLESS=true
+      - PW_USE_FAKE_MEDIA=true
+      - PW_VIDEO_MODE=on
+    security_opt:
+      - seccomp=unconfined
+    shm_size: "1gb"
+    profiles:
+      - test
+
+  # Pre-flight connectivity check
+  # Usage: docker compose run --rm doctor
+  doctor:
+    build: .
+    command: ["node", "scripts/doctor.mjs"]
+    env_file:
+      - .env
+    security_opt:
+      - seccomp=unconfined
+    profiles:
+      - tools
