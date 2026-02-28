@@ -1,6 +1,6 @@
 {
   "name": "audrique",
-  "version": "0.1.0-alpha",
+  "version": "0.2.0",
   "description": "End-to-end testing framework for contact centers. Coordinates voice call automation, CRM verification, and telephony validation in declarative test scenarios.",
   "type": "module",
   "license": "MIT",

@@ -15,6 +15,16 @@
 
 ---
 
+## What's New in v0.2.0
+
+- **Speech IVR Detection** — Whisper-based transcription replaces timer-based DTMF guessing. The framework listens for IVR prompts, transcribes them in real time, and sends the correct DTMF tone only when the expected prompt is heard.
+- **Advanced Settings UI** — 33 system-wide settings (timeouts, polling intervals, supervisor behavior flags, Playwright config) are now configurable from Scenario Studio. No more editing hardcoded values in spec files.
+- **Setup Menu** — Salesforce-style gear dropdown consolidates Connections and Advanced Settings under one menu.
+- **Settings Injection Pipeline** — Settings persist to `system-settings.json` and are automatically injected into every suite run via a 5-layer priority chain: hardcoded defaults → system settings → suite vocabulary → scenario overrides → CLI env vars.
+- **Docker support** — Full containerized execution with Vault integration, pre-flight health checks, and session management.
+
+---
+
 ## Why Agentic Testing?
 
 Traditional contact center testing is **manual, slow, and siloed**. Each tool covers one layer:
@@ -46,9 +56,11 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 | Capability | Description |
 |------------|-------------|
 | **Autonomous call orchestration** | Places real calls via Connect CCP (Twilio beta), navigates IVR menus with DTMF |
+| **Speech IVR detection** | Whisper-based transcription detects IVR prompts and navigates menus by voice — no timer guessing |
 | **Multi-agent browser verification** | 3 parallel Playwright sessions (Agent, CCP, Supervisor) |
 | **Declarative scenario DSL** | JSON-based scenarios — no code to write |
 | **Visual Scenario Studio** | Drag-and-drop wizard builds scenarios at localhost:4200 |
+| **Advanced Settings UI** | 33 configurable timeouts, polling intervals, and behavior flags — all from the UI |
 | **Org auto-discovery** | SOQL-powered discovery of queues, skills, routing, business hours |
 | **Video evidence capture** | Parallel recording + FFmpeg merge with speed modulation and annotations |
 | **Natural language authoring** | Gherkin-style test authoring compiled to executable JSON |
@@ -180,7 +192,9 @@ npm run studio
 The Studio provides:
 - **Suite management** — Create, rename, delete test suites from the UI
 - **Connection management** — Configure Salesforce + Connect + Twilio connections with vault-backed or direct credentials
+- **Advanced Settings** — 33 configurable settings across 6 groups (call handling, supervisor monitoring, incoming detection, behavior flags, transcript timing, Playwright) — all from a collapsible UI, persisted to `system-settings.json`, injected into every suite run
 - **Vault integration** — HashiCorp Vault support with "Test Connection" verification, auto-populated secret references, and regulated mode enforcement
+- **Setup menu** — Salesforce-style gear dropdown consolidating Connections and Advanced Settings
 - Step-by-step wizard with call setup, IVR routing, agent verification
 - Visual IVR flowchart builder that grows as you add menu levels
 - Skill-based routing configuration with auto-discovery from your org
@@ -456,7 +470,7 @@ audrique/
 
 **Current release** supports Salesforce Service Cloud Voice + Amazon Connect. The architecture is **platform-agnostic by design** — the declarative scenario DSL, browser automation, and evidence pipeline are CRM-independent. Adding a new platform requires only a new verifier package and browser adapter.
 
-### Current Support (v0.1)
+### Current Support (v0.2)
 
 | Component | Technology | Status |
 |-----------|------------|--------|
