@@ -238,7 +238,13 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
           passed: true,
           details: supervisorQueueName ? `queue=${supervisorQueueName}` : "queue=auto-detect"
         });
-        if (verifySupervisorAgentOffer) {
+        if (verifySupervisorAgentOffer && !supervisorSession) {
+          // Only open a separate agent observer tab when there is no queue
+          // observer already running.  Opening a third SF Lightning tab in
+          // headless Docker Chrome causes browser instability, and sharing a
+          // page between two concurrent polling loops causes surface-switching
+          // conflicts.  When the queue observer is active, the in-progress
+          // fallback already verifies the call was handled by the agent.
           supervisorAgentSession = await startSupervisorAgentObserver({
             agentPage: page,
             targetUrl: serviceConsoleTarget || page.url(),
@@ -283,8 +289,16 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
         }
 
         if (needsRecovery) {
-          await page.reload({ waitUntil: "domcontentloaded" });
+          // Navigate back to the original Service Console URL (not just reload)
+          // because supervisor tabs can leave the agent page on the wrong URL.
+          if (serviceConsoleTarget) {
+            await gotoWithLightningRedirectTolerance(page, serviceConsoleTarget);
+          } else {
+            await page.reload({ waitUntil: "domcontentloaded" });
+          }
           await page.waitForTimeout(5000);
+          // Re-confirm we're in the right app after navigation.
+          await ensureSalesforceApp(page, appName);
           // Omni must go Online FIRST — provider becomes routable only after.
           await ensurePhoneUtilityOpen(page);
           await ensureOmniStatus(page, targetOmniStatus);
@@ -368,6 +382,8 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
           ivrSaveRecording: /^(true|1|yes|on)$/i.test(
             (process.env.IVR_TRANSCRIBE ?? process.env.IVR_SAVE_RECORDING ?? "false").trim()
           ),
+          ivrTranscriptionBackend: (process.env.IVR_TRANSCRIPTION_BACKEND?.trim() || "local") as "local" | "none",
+          ivrLanguage: process.env.IVR_LANGUAGE?.trim() || "auto",
         });
         timeline.callTriggerStartMs = timeline.callTriggerStartMs ?? Date.now();
         timeline.ccpDialConfirmedMs = connectCcpSession.dialStartedAtMs ?? Date.now();
@@ -570,11 +586,24 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
           (process.env.SUPERVISOR_ALLOW_IN_PROGRESS_FALLBACK ?? "false").trim()
         );
         await assertAndMark(page, assertionLog, "Supervisor queue waiting observed", async () => {
+          // When we already captured the observation pre-accept, use it directly.
+          // When requireSupervisorBeforeAccept=true AND requirePreAcceptObservation=true,
+          // the pre-accept check was mandatory — fail immediately if it missed.
+          // When requireSupervisorBeforeAccept=true AND requirePreAcceptObservation=false,
+          // the pre-accept check was best-effort — give the observer a post-accept grace
+          // period (the observer may catch in-progress-work after the call is accepted).
+          const postAcceptGraceMs = Math.max(
+            1000,
+            Number(process.env.OBSERVER_FINALIZE_WAIT_SEC ?? 10) * 1000
+          );
           const observed =
             supervisorDirectObservation ??
-            (requireSupervisorBeforeAccept
+            (requireSupervisorBeforeAccept && requirePreAcceptObservation
               ? null
-              : await waitForObservationWithin(queueObservationPromise, Math.max(1000, supervisorBeforeAcceptWaitMs)));
+              : await waitForObservationWithin(
+                  queueObservationPromise,
+                  requireSupervisorBeforeAccept ? postAcceptGraceMs : Math.max(1000, supervisorBeforeAcceptWaitMs)
+                ));
           if (!observed) {
             throw new Error(
               "Supervisor queue waiting assertion requires a real Queue Backlog Total Waiting increase during ringing, but none was observed."

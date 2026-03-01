@@ -37,8 +37,14 @@ export interface IvrStepResult {
   promptDurationMs: number;
   dtmfSentMs: number;
   expect?: string;
-  /** Set after post-hoc transcription. */
+  /** Whether the expect keyword was matched (transcription or post-hoc). */
   expectMatch?: boolean;
+  /** Transcript of the prompt that triggered this DTMF (if transcription active). */
+  transcript?: string;
+  /** Number of informational prompts skipped before this input prompt. */
+  promptsSkipped?: number;
+  /** Whisper transcription latency in ms. */
+  transcriptionLatencyMs?: number;
 }
 
 export interface IvrNavigationResult {
@@ -362,15 +368,39 @@ export async function waitForPromptEnd(
     silenceMinMs?: number;
     speechMinMs?: number;
     maxWaitSec?: number;
+    /** Previous promptCount — used to detect prompts that completed before we started listening. */
+    previousPromptCount?: number;
   }
-): Promise<{ durationMs: number; timedOut: boolean; speechDurationMs: number }> {
+): Promise<{ durationMs: number; timedOut: boolean; speechDurationMs: number; promptCount: number }> {
   const silenceMinMs = opts?.silenceMinMs ?? 800;
   const speechMinMs = opts?.speechMinMs ?? 300;
   const maxWaitMs = (opts?.maxWaitSec ?? 30) * 1000;
+  const previousPromptCount = opts?.previousPromptCount ?? -1;
   const start = Date.now();
 
   let heardSpeech = false;
   let logCounter = 0;
+
+  // Check if a prompt already completed before we started listening
+  const initial = await getAudioState(page);
+  if (
+    initial.ready &&
+    !initial.isSpeaking &&
+    previousPromptCount >= 0 &&
+    initial.promptCount > previousPromptCount &&
+    initial.silenceDurationMs >= silenceMinMs
+  ) {
+    console.log(
+      `[IVR-Speech] Prompt already completed (promptCount=${initial.promptCount} > prev=${previousPromptCount}, ` +
+      `silenceMs=${initial.silenceDurationMs}). Returning immediately.`
+    );
+    return {
+      durationMs: 0,
+      timedOut: false,
+      speechDurationMs: initial.speechDurationMs,
+      promptCount: initial.promptCount,
+    };
+  }
 
   while (Date.now() - start < maxWaitMs) {
     const state = await getAudioState(page);
@@ -396,6 +426,23 @@ export async function waitForPromptEnd(
         heardSpeech = true;
         console.log(`[IVR-Speech] Speech detected at ${((Date.now() - start) / 1000).toFixed(1)}s (rmsDb=${state.rmsDb.toFixed(1)})`);
       }
+      // Also check if a new prompt completed while we were waiting for Phase 1
+      if (
+        !state.isSpeaking &&
+        previousPromptCount >= 0 &&
+        state.promptCount > previousPromptCount &&
+        state.silenceDurationMs >= silenceMinMs
+      ) {
+        console.log(
+          `[IVR-Speech] New prompt completed during wait (promptCount=${state.promptCount} > prev=${previousPromptCount}).`
+        );
+        return {
+          durationMs: Date.now() - start,
+          timedOut: false,
+          speechDurationMs: state.speechDurationMs,
+          promptCount: state.promptCount,
+        };
+      }
       await page.waitForTimeout(100);
       continue;
     }
@@ -406,16 +453,19 @@ export async function waitForPromptEnd(
         durationMs: Date.now() - start,
         timedOut: false,
         speechDurationMs: state.speechDurationMs,
+        promptCount: state.promptCount,
       };
     }
 
     await page.waitForTimeout(100);
   }
 
+  const finalState = await getAudioState(page);
   return {
     durationMs: Date.now() - start,
     timedOut: true,
     speechDurationMs: 0,
+    promptCount: finalState.promptCount,
   };
 }
 
@@ -485,6 +535,198 @@ export async function navigateIvrWithSpeechDetection(
         `DTMF="${step.dtmf}" sent at ${dtmfSentMs}ms` +
         (promptResult.timedOut ? " (TIMEOUT FALLBACK)" : "") +
         (step.label ? ` [${step.label}]` : "")
+    );
+
+    // Post-DTMF delay before next level
+    if (i < steps.length - 1) {
+      await page.waitForTimeout(postDtmfDelayMs);
+    }
+  }
+
+  return {
+    mode: "speech",
+    steps: stepResults,
+    totalDurationMs: Date.now() - startMs,
+  };
+}
+
+/**
+ * Extract accumulated audio from the browser WITHOUT stopping the MediaRecorder.
+ *
+ * Reads `_recordedChunks` from a marker index to the end, converts to a single
+ * Blob, and returns as a Buffer. Updates the marker so the next extraction only
+ * gets new chunks.
+ */
+export async function extractAccumulatedAudio(page: Page): Promise<Buffer | null> {
+  const base64Audio = await page.evaluate(async () => {
+    const s = (window as any).__ivrAudio;
+    if (!s || !s._recordedChunks || s._recordedChunks.length === 0) return null;
+
+    // Check if there are new chunks since last extraction
+    const prevIndex = s._lastExtractIndex ?? 0;
+    if (prevIndex >= s._recordedChunks.length) return null;
+
+    // Always extract ALL chunks from index 0 to preserve the EBML/WebM header
+    // that FFmpeg requires for parsing. Track the index only to detect new data.
+    s._lastExtractIndex = s._recordedChunks.length;
+
+    const blob = new Blob(s._recordedChunks, { type: "audio/webm;codecs=opus" });
+    const arrayBuffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  });
+
+  if (!base64Audio) return null;
+  return Buffer.from(base64Audio, "base64");
+}
+
+/**
+ * Navigate a multi-level IVR using transcription-driven keyword matching.
+ *
+ * For each step:
+ *   1. Wait for IVR prompt to end (speech→silence detection)
+ *   2. Extract accumulated audio from browser
+ *   3. Transcribe with whisper.cpp
+ *   4. If step has `expect` keyword: check transcript
+ *      - MATCH → send DTMF, advance
+ *      - NO MATCH → informational prompt, loop back and wait for next prompt
+ *   5. If step has NO `expect`: send DTMF after first prompt (backward compatible)
+ *
+ * @param transcribe — whisper.cpp transcription callback
+ * @param matchKeyword — keyword matching callback
+ */
+export async function navigateIvrWithTranscription(
+  page: Page,
+  steps: IvrStep[],
+  sendDtmf: (page: Page, digits: string) => Promise<void>,
+  transcribe: (buffer: Buffer) => { text: string; durationMs: number },
+  matchKeyword: (transcript: string, pattern: string) => { matched: boolean; keyword?: string },
+  opts?: IvrSpeechDetectorOpts & { maxPromptRetries?: number }
+): Promise<IvrNavigationResult> {
+  const silenceMinMs = opts?.silenceMinMs ?? 800;
+  const speechMinMs = opts?.speechMinMs ?? 300;
+  const maxPromptWaitSec = opts?.maxPromptWaitSec ?? 30;
+  const postDtmfDelayMs = opts?.postDtmfDelayMs ?? 200;
+  const maxRetries = opts?.maxPromptRetries ?? 5;
+
+  const startMs = Date.now();
+  const stepResults: IvrStepResult[] = [];
+
+  // Get initial promptCount for detecting already-completed prompts.
+  // Subtract 1 so that if a prompt already completed before we started,
+  // waitForPromptEnd immediately recognizes it (promptCount > previousPromptCount).
+  const initialState = await getAudioState(page);
+  let lastPromptCount = Math.max(-1, initialState.promptCount - 1);
+  if (initialState.promptCount > 0) {
+    console.log(
+      `[IVR-Transcribe] ${initialState.promptCount} prompt(s) already completed before transcription started ` +
+      `(silenceMs=${initialState.silenceDurationMs}). Will detect the latest prompt.`
+    );
+  }
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    const hasExpect = !!(step.expect?.trim());
+    let promptsSkipped = 0;
+    let matched = false;
+    let transcript = "";
+    let transcriptionLatencyMs = 0;
+
+    for (let retry = 0; retry <= maxRetries; retry++) {
+      // Wait for the next prompt to finish
+      const promptResult = await waitForPromptEnd(page, {
+        silenceMinMs,
+        speechMinMs,
+        maxWaitSec: maxPromptWaitSec,
+        previousPromptCount: lastPromptCount,
+      });
+
+      lastPromptCount = promptResult.promptCount;
+
+      if (promptResult.timedOut) {
+        console.warn(
+          `[IVR-Transcribe] Step ${i + 1}/${steps.length}: Timed out waiting for prompt end ` +
+          `(${maxPromptWaitSec}s). Sending DTMF "${step.dtmf}" as fallback.`
+        );
+        break; // Send DTMF as fallback
+      }
+
+      // If no expect keyword, send DTMF after first prompt
+      if (!hasExpect) {
+        console.log(
+          `[IVR-Transcribe] Step ${i + 1}/${steps.length}: No expect keyword, sending DTMF "${step.dtmf}" after prompt.`
+        );
+        break;
+      }
+
+      // Extract audio and transcribe
+      const audioBuffer = await extractAccumulatedAudio(page);
+      if (!audioBuffer || audioBuffer.length === 0) {
+        console.warn(
+          `[IVR-Transcribe] Step ${i + 1}/${steps.length}: No audio captured for transcription. Sending DTMF as fallback.`
+        );
+        break;
+      }
+
+      try {
+        const result = transcribe(audioBuffer);
+        transcript = result.text;
+        transcriptionLatencyMs = result.durationMs;
+
+        console.log(
+          `[IVR-Transcribe] Step ${i + 1}/${steps.length}: Transcript (${result.durationMs}ms): "${transcript}"`
+        );
+
+        // Check keyword match
+        const match = matchKeyword(transcript, step.expect!);
+        if (match.matched) {
+          matched = true;
+          console.log(
+            `[IVR-Transcribe] Step ${i + 1}/${steps.length}: Keyword MATCHED "${match.keyword}" — sending DTMF "${step.dtmf}".`
+          );
+          break;
+        }
+
+        // No match — this was an informational prompt, wait for the next one
+        promptsSkipped++;
+        console.log(
+          `[IVR-Transcribe] Step ${i + 1}/${steps.length}: Keyword NOT matched (expect="${step.expect}"). ` +
+          `Skipping informational prompt ${promptsSkipped}/${maxRetries}.`
+        );
+      } catch (err) {
+        console.warn(
+          `[IVR-Transcribe] Step ${i + 1}/${steps.length}: Transcription error: ${err}. Sending DTMF as fallback.`
+        );
+        break;
+      }
+    }
+
+    // Send DTMF
+    await sendDtmf(page, step.dtmf);
+    const dtmfSentMs = Date.now() - startMs;
+
+    stepResults.push({
+      dtmf: step.dtmf,
+      label: step.label,
+      expect: step.expect,
+      expectMatch: hasExpect ? matched : undefined,
+      transcript: transcript || undefined,
+      promptsSkipped: promptsSkipped > 0 ? promptsSkipped : undefined,
+      transcriptionLatencyMs: transcriptionLatencyMs > 0 ? transcriptionLatencyMs : undefined,
+      speechDetectedMs: 0,
+      silenceDetectedMs: 0,
+      promptDurationMs: 0,
+      dtmfSentMs,
+    });
+
+    console.log(
+      `[IVR-Transcribe] Step ${i + 1}/${steps.length}: DTMF="${step.dtmf}" sent at ${dtmfSentMs}ms` +
+      (step.label ? ` [${step.label}]` : "") +
+      (hasExpect ? ` (match=${matched}, skipped=${promptsSkipped})` : "")
     );
 
     // Post-DTMF delay before next level

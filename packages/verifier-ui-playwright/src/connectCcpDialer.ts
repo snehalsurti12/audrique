@@ -4,11 +4,17 @@ import {
   injectIvrAudioInterceptor,
   waitForAudioReady,
   navigateIvrWithSpeechDetection,
+  navigateIvrWithTranscription,
   saveIvrRecording,
   saveIvrNavigationResult,
   type IvrStep,
   type IvrNavigationResult,
 } from "./ivrSpeechDetector.js";
+import {
+  isWhisperAvailable,
+  transcribeAudioChunk,
+  matchExpectedKeyword,
+} from "./ivrWhisperTranscriber.js";
 
 export type { IvrStep, IvrNavigationResult };
 
@@ -38,6 +44,10 @@ export interface ConnectCcpDialInput {
   ivrMaxPromptWaitSec?: number;
   /** Save IVR audio recording for post-hoc transcription. Default false. */
   ivrSaveRecording?: boolean;
+  /** Transcription backend: "local" (whisper.cpp) | "none" (speech-only). Default: auto-detect. */
+  ivrTranscriptionBackend?: "local" | "none";
+  /** Language hint for Whisper: "en", "es", "fr", "auto". Default: "auto". */
+  ivrLanguage?: string;
 }
 
 export interface ConnectCcpSession {
@@ -120,9 +130,13 @@ export async function dialFromConnectCcp(input: ConnectCcpDialInput): Promise<Co
 
     if (steps.length > 0) {
       await waitForConnectedCallReadyForDtmf(page, 15_000);
+
+      // In speech mode, only wait 2 seconds (enough for WebRTC to establish)
+      // instead of 8 seconds which causes the detector to miss the IVR greeting.
+      const minElapsedForSpeech = useSpeechMode ? 2 : (input.dtmfMinCallElapsedSec ?? 8);
       await waitForCallElapsedAtLeast(
         page,
-        Math.max(0, Math.floor(input.dtmfMinCallElapsedSec ?? 8)),
+        Math.max(0, Math.floor(minElapsedForSpeech)),
         30_000
       );
 
@@ -137,19 +151,48 @@ export async function dialFromConnectCcp(input: ConnectCcpDialInput): Promise<Co
         await sendDtmfSequence(page, dtmfDigits, Math.max(40, input.dtmfInterDigitDelayMs ?? 420));
         await page.waitForTimeout(Math.max(0, input.dtmfPostDelayMs ?? 1200));
       } else {
-        ivrResult = await navigateIvrWithSpeechDetection(
-          page,
-          steps,
-          async (p, digits) => {
+        // Decide: transcription-driven or speech-silence-only
+        const useTranscription =
+          input.ivrTranscriptionBackend !== "none" &&
+          isWhisperAvailable() &&
+          steps.some((s) => s.expect);
+
+        if (useTranscription) {
+          console.log("[IVR-Transcribe] Using whisper.cpp transcription-driven IVR navigation.");
+          const sendDtmfCallback = async (p: Page, digits: string) => {
             await openDtmfSurfaceIfPresent(p);
             await sendDtmfSequence(p, digits, Math.max(40, input.dtmfInterDigitDelayMs ?? 420));
-          },
-          {
-            silenceMinMs: input.ivrSilenceMinMs,
-            speechMinMs: input.ivrSpeechMinMs,
-            maxPromptWaitSec: input.ivrMaxPromptWaitSec,
+          };
+          ivrResult = await navigateIvrWithTranscription(
+            page,
+            steps,
+            sendDtmfCallback,
+            (buffer) => transcribeAudioChunk(buffer, { language: input.ivrLanguage }),
+            (transcript, pattern) => matchExpectedKeyword(transcript, pattern),
+            {
+              silenceMinMs: input.ivrSilenceMinMs,
+              speechMinMs: input.ivrSpeechMinMs,
+              maxPromptWaitSec: input.ivrMaxPromptWaitSec,
+            }
+          );
+        } else {
+          if (input.ivrTranscriptionBackend !== "none" && steps.some((s) => s.expect)) {
+            console.warn("[IVR-Transcribe] whisper.cpp not available — falling back to speech-silence-only mode.");
           }
-        );
+          ivrResult = await navigateIvrWithSpeechDetection(
+            page,
+            steps,
+            async (p, digits) => {
+              await openDtmfSurfaceIfPresent(p);
+              await sendDtmfSequence(p, digits, Math.max(40, input.dtmfInterDigitDelayMs ?? 420));
+            },
+            {
+              silenceMinMs: input.ivrSilenceMinMs,
+              speechMinMs: input.ivrSpeechMinMs,
+              maxPromptWaitSec: input.ivrMaxPromptWaitSec,
+            }
+          );
+        }
       }
 
       // Save IVR audio recording if requested

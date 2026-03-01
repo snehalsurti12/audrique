@@ -12,6 +12,7 @@ services:
       - ./.auth:/app/.auth
       - ./scenarios:/app/scenarios
       - ./instances:/app/instances
+      - ./.models:/app/.models
     env_file:
       - .env
     environment:
@@ -34,6 +35,7 @@ services:
       - ./.auth:/app/.auth
       - ./scenarios:/app/scenarios
       - ./instances:/app/instances
+      - ./.models:/app/.models
     env_file:
       - .env
     environment:

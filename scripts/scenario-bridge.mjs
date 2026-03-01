@@ -97,6 +97,12 @@ export function scenarioToEnv(scenario, defaults = {}) {
   if (callTrigger.ivrMaxPromptWaitSec != null) {
     env.IVR_MAX_PROMPT_WAIT_SEC = String(callTrigger.ivrMaxPromptWaitSec);
   }
+  if (callTrigger.ivrTranscriptionBackend) {
+    env.IVR_TRANSCRIPTION_BACKEND = callTrigger.ivrTranscriptionBackend;
+  }
+  if (callTrigger.ivrLanguage) {
+    env.IVR_LANGUAGE = callTrigger.ivrLanguage;
+  }
 
   // ── Timeouts ─────────────────────────────────────────────────────────
   if (timeouts.ringSec != null) {

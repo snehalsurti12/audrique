@@ -15,13 +15,22 @@
 
 ---
 
-## What's New in v0.2.0
+## What's New in v0.3.0
 
-- **Speech IVR Detection** — Whisper-based transcription replaces timer-based DTMF guessing. The framework listens for IVR prompts, transcribes them in real time, and sends the correct DTMF tone only when the expected prompt is heard.
-- **Advanced Settings UI** — 33 system-wide settings (timeouts, polling intervals, supervisor behavior flags, Playwright config) are now configurable from Scenario Studio. No more editing hardcoded values in spec files.
-- **Setup Menu** — Salesforce-style gear dropdown consolidates Connections and Advanced Settings under one menu.
-- **Settings Injection Pipeline** — Settings persist to `system-settings.json` and are automatically injected into every suite run via a 5-layer priority chain: hardcoded defaults → system settings → suite vocabulary → scenario overrides → CLI env vars.
+- **Transcription-Driven IVR Navigation** — Local whisper.cpp (ggml-small, 466 MB, 99 languages) transcribes each IVR prompt in ~2.5 s, matches keywords (`"press 1|support"`), skips informational prompts, and sends DTMF only on match. Falls back to speech-silence detection when unavailable.
+- **Session Validity Gate** — Suite runner validates SF + Connect session files (existence, age, cookies) before running. Fails fast with clear instructions instead of wasting time on expired sessions. Bypass with `SKIP_SESSION_CHECK=true`.
+- **Reliable Multi-Prompt Audio** — Fixed WebM EBML header handling for consistent audio extraction across multiple IVR prompts.
+- **Streamlined Suite** — Default suite reduced to 3 proven scenarios (inbound, IVR routing, IVR timeout). All pass with supervisor verification and video evidence.
+
+<details>
+<summary>v0.2.0 highlights</summary>
+
+- **Speech IVR Detection** — Browser-side AnalyserNode speech-silence detection for IVR prompt boundaries.
+- **Advanced Settings UI** — 33 system-wide settings configurable from Scenario Studio.
+- **Setup Menu** — Salesforce-style gear dropdown consolidates Connections and Advanced Settings.
+- **Settings Injection Pipeline** — 5-layer priority chain: hardcoded defaults → system settings → suite vocabulary → scenario overrides → CLI env vars.
 - **Docker support** — Full containerized execution with Vault integration, pre-flight health checks, and session management.
+</details>
 
 ---
 
@@ -56,7 +65,7 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 | Capability | Description |
 |------------|-------------|
 | **Autonomous call orchestration** | Places real calls via Connect CCP (Twilio beta), navigates IVR menus with DTMF |
-| **Speech IVR detection** | Whisper-based transcription detects IVR prompts and navigates menus by voice — no timer guessing |
+| **Transcription-driven IVR** | Local whisper.cpp transcribes IVR prompts in ~2.5 s, matches keywords, sends DTMF on match — no timer guessing |
 | **Multi-agent browser verification** | 3 parallel Playwright sessions (Agent, CCP, Supervisor) |
 | **Declarative scenario DSL** | JSON-based scenarios — no code to write |
 | **Visual Scenario Studio** | Drag-and-drop wizard builds scenarios at localhost:4200 |
@@ -104,7 +113,7 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 │ - Twilio API │   │              │   │                  │
 │ - CCP Dialer │   │ - SF Agent   │   │ - SF SOQL        │
 │ - DTMF Nav   │   │ - CCP Panel  │   │ - Connect CTR    │
-│ - IVR Prompt │   │ - Supervisor │   │ - VoiceCall      │
+│ - IVR Whisper│   │ - Supervisor │   │ - VoiceCall      │
 │              │   │ - Screen Pop │   │ - AgentWork      │
 │              │   │ - Transcript │   │ - PSR Records    │
 └─────────────┘   └──────────────┘   └─────────────────┘
@@ -173,12 +182,30 @@ INSTANCE=myorg npm run instance:test:ui:state
 # Full E2E suite (all scenarios)
 INSTANCE=myorg npm run instance:test:e2e
 
-# V2 declarative suite (9 scenarios)
+# V2 declarative suite (3 scenarios)
 INSTANCE=myorg npm run instance:test:e2e:v2
 
 # Dry run (validate without executing)
 INSTANCE=myorg npm run instance:test:e2e:v2:dry
 ```
+
+#### Using the CLI
+
+```bash
+# Run default suite with automatic session refresh
+audrique run --refresh-auth
+
+# Run a specific suite file
+audrique run scenarios/e2e/my-suite.json
+
+# Dry run — validate without executing
+audrique run --dry-run
+
+# Capture auth sessions
+audrique auth
+```
+
+Session validity is checked automatically before each suite run. If sessions are expired, the runner exits with clear instructions. Use `audrique run --refresh-auth` to auto-refresh before running.
 
 ### Scenario Studio
 
@@ -213,8 +240,12 @@ Scenarios are defined as JSON — no code to write:
   "description": "DTMF 1 routes to Support Queue",
   "callTrigger": {
     "mode": "connect_ccp",
-    "ivrDigits": "1",
-    "ivrInitialDelayMs": 3500
+    "ivrMode": "speech",
+    "ivrLanguage": "en",
+    "ivrMaxPromptWaitSec": 15,
+    "ivrSteps": [
+      { "dtmf": "1", "expect": "press 1|support", "label": "Support Queue" }
+    ]
   },
   "steps": [
     { "action": "preflight" },
@@ -443,9 +474,11 @@ audrique/
 │       ├── sfTranscript.ts    # Real-time transcript capture
 │       ├── sfSupervisorObserver.ts  # Supervisor queue monitoring
 │       ├── sfOrgDiscovery.ts  # Auto-discovery via SOQL + DOM
-│       └── connectCcpDialer.ts     # CCP softphone automation
+│       ├── connectCcpDialer.ts     # CCP softphone automation
+│       ├── ivrSpeechDetector.ts   # Browser-side IVR speech/silence detection
+│       └── ivrWhisperTranscriber.ts # Local whisper.cpp transcription
 ├── scenarios/
-│   ├── e2e/full-suite-v2.json # 9 declarative test scenarios
+│   ├── e2e/full-suite-v2.json # 3 proven test scenarios
 │   └── examples/              # Reference scenarios
 ├── webapp/                    # Scenario Studio (visual builder)
 ├── scripts/                   # CLI tools, auth capture, video merge
@@ -470,7 +503,7 @@ audrique/
 
 **Current release** supports Salesforce Service Cloud Voice + Amazon Connect. The architecture is **platform-agnostic by design** — the declarative scenario DSL, browser automation, and evidence pipeline are CRM-independent. Adding a new platform requires only a new verifier package and browser adapter.
 
-### Current Support (v0.2)
+### Current Support (v0.3)
 
 | Component | Technology | Status |
 |-----------|------------|--------|

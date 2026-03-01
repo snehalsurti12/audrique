@@ -6,8 +6,93 @@ import { loadVocabularyEnv, loadSystemSettingsEnv } from "./vocabularyLoader.mjs
 
 const DEFAULT_SUITE_FILE = "scenarios/e2e/full-suite.json";
 const DEFAULT_RESULTS_ROOT = path.resolve(process.cwd(), "test-results", "e2e-suite");
+const SESSION_MAX_AGE_MIN = parseInt(process.env.AUTH_MAX_AGE_MIN || "120", 10);
+
+// ── Upfront session validity check ───────────────────────────────────────────
+
+function validateSessions() {
+  const sfStatePath = path.resolve(
+    process.cwd(),
+    process.env.SF_STORAGE_STATE || ".auth/sf-personal.json"
+  );
+  const connectStatePath = path.resolve(
+    process.cwd(),
+    process.env.CONNECT_STORAGE_STATE || ".auth/connect-ccp-personal.json"
+  );
+
+  const errors = [];
+
+  // Check SF session
+  if (!fs.existsSync(sfStatePath)) {
+    errors.push(`Salesforce session file missing: ${sfStatePath}`);
+  } else {
+    const stat = fs.statSync(sfStatePath);
+    const ageMin = Math.round((Date.now() - stat.mtimeMs) / 60000);
+    if (ageMin > SESSION_MAX_AGE_MIN) {
+      errors.push(`Salesforce session expired: ${ageMin} min old (max ${SESSION_MAX_AGE_MIN} min). File: ${sfStatePath}`);
+    } else {
+      // Verify file has valid sid cookie
+      try {
+        const data = JSON.parse(fs.readFileSync(sfStatePath, "utf8"));
+        const cookies = Array.isArray(data) ? data : data?.cookies;
+        const sid = cookies?.find(c => c.name === "sid");
+        if (!sid?.value) {
+          errors.push(`Salesforce session file has no sid cookie: ${sfStatePath}`);
+        } else {
+          console.log(`[session-check] SF session: OK (${ageMin} min old)`);
+        }
+      } catch (e) {
+        errors.push(`Salesforce session file is corrupt: ${e.message}`);
+      }
+    }
+  }
+
+  // Check Connect session
+  if (!fs.existsSync(connectStatePath)) {
+    errors.push(`Connect CCP session file missing: ${connectStatePath}`);
+  } else {
+    const stat = fs.statSync(connectStatePath);
+    const ageMin = Math.round((Date.now() - stat.mtimeMs) / 60000);
+    if (ageMin > SESSION_MAX_AGE_MIN) {
+      errors.push(`Connect CCP session expired: ${ageMin} min old (max ${SESSION_MAX_AGE_MIN} min). File: ${connectStatePath}`);
+    } else {
+      try {
+        const data = JSON.parse(fs.readFileSync(connectStatePath, "utf8"));
+        const cookies = Array.isArray(data) ? data : data?.cookies;
+        if (!cookies || cookies.length === 0) {
+          errors.push(`Connect CCP session file has no cookies: ${connectStatePath}`);
+        } else {
+          console.log(`[session-check] Connect session: OK (${ageMin} min old)`);
+        }
+      } catch (e) {
+        errors.push(`Connect CCP session file is corrupt: ${e.message}`);
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    console.error("\n[session-check] Session validation FAILED:");
+    for (const err of errors) {
+      console.error(`  - ${err}`);
+    }
+    console.error(`\nRefresh sessions before running tests:`);
+    console.error(`  audrique run --refresh-auth`);
+    console.error(`  # or manually:`);
+    console.error(`  docker compose run --rm audrique node bin/audrique.mjs auth\n`);
+    process.exit(1);
+  }
+
+  console.log("[session-check] All sessions valid. Proceeding.\n");
+}
+
+// ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
+  // Gate: validate sessions before doing anything else
+  if (!/^(1|true|yes|on)$/i.test((process.env.SKIP_SESSION_CHECK ?? "").trim())) {
+    validateSessions();
+  }
+
   const suiteFile = path.resolve(
     process.cwd(),
     process.env.E2E_SUITE_FILE?.trim() || DEFAULT_SUITE_FILE

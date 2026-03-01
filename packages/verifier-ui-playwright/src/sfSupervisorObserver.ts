@@ -537,6 +537,14 @@ export async function waitForSupervisorQueueWaiting(
   let lastInProgressSignature = args.baselineInProgressSignature;
   let lastSource = "unknown";
   let lastNavigateAttemptMs = 0;
+  let lastInProgressCheckMs = 0;
+  // Throttle In-Progress surface switches to reduce disruption to the agent's
+  // CTI adapter — navigating between supervisor surfaces in the same browser
+  // context causes Salesforce to intermittently drop the telephony provider.
+  const inProgressCheckIntervalMs = Math.max(
+    5000,
+    Number(process.env.SUPERVISOR_IN_PROGRESS_CHECK_INTERVAL_MS ?? 10000)
+  );
   const allowInProgressFallback = !/^(false|0|no|off)$/i.test(
     (process.env.SUPERVISOR_ALLOW_IN_PROGRESS_FALLBACK ?? "false").trim()
   );
@@ -592,7 +600,13 @@ export async function waitForSupervisorQueueWaiting(
       }
     }
 
-    if (allowInProgressFallback || skipQueueBacklog) {
+    // Throttle In-Progress surface checks to avoid constant navigation that
+    // disrupts the agent's CTI connection in the shared browser context.
+    const shouldCheckInProgress =
+      (allowInProgressFallback || skipQueueBacklog) &&
+      (skipQueueBacklog || Date.now() - lastInProgressCheckMs >= inProgressCheckIntervalMs);
+    if (shouldCheckInProgress) {
+      lastInProgressCheckMs = Date.now();
       if (skipQueueBacklog) {
         await ensureSupervisorInProgressWorkSurfaceOpen(page);
       } else {

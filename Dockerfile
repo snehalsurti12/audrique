@@ -11,6 +11,28 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends vault && \
     rm -rf /var/lib/apt/lists/*
 
+# Install whisper.cpp for real-time IVR transcription
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential cmake && \
+    cd /tmp && \
+    git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git && \
+    cd whisper.cpp && \
+    cmake -B build && cmake --build build --config Release && \
+    cp build/bin/whisper-cli /usr/local/bin/whisper-cpp && \
+    cp build/src/libwhisper.so* /usr/local/lib/ && \
+    find build/ggml -name 'libggml*.so*' -exec cp {} /usr/local/lib/ \; && \
+    ldconfig && \
+    cd / && rm -rf /tmp/whisper.cpp && \
+    apt-get purge -y build-essential cmake && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Download Whisper small multilingual model (466MB, supports 99 languages)
+# Stored at /opt/whisper-models so it's not overwritten by volume mounts on /app/.models
+RUN mkdir -p /opt/whisper-models && \
+    wget -q -O /opt/whisper-models/ggml-small.bin \
+      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+
 WORKDIR /app
 
 # Copy package files and install all dependencies (including Playwright)
