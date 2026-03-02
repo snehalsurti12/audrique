@@ -53,9 +53,12 @@ function needsRefresh(session, maxAgeMin, force) {
 
 function runScript(scriptName, env) {
   return new Promise((resolve) => {
-    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-    console.log(`[refresh-auth] Running: npm run ${scriptName}`);
-    const child = spawn(npmCmd, ["run", scriptName], {
+    // Route through run-instance.mjs so Vault secrets are resolved before
+    // the target auth script executes. This is critical in Docker/CI where
+    // credentials live in Vault, not in process.env directly.
+    const runInstancePath = path.join(ROOT, "scripts/run-instance.mjs");
+    console.log(`[refresh-auth] Running: node scripts/run-instance.mjs ${scriptName}`);
+    const child = spawn("node", [runInstancePath, scriptName], {
       cwd: ROOT,
       env: { ...process.env, ...env },
       stdio: "inherit"
