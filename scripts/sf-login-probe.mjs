@@ -28,6 +28,13 @@ async function main() {
   ]);
   await page.waitForTimeout(1500);
 
+  // Check for login error before proceeding
+  const loginError = await page.locator("#error").textContent().catch(() => "");
+  if (loginError) {
+    console.error("[sf-login] Login failed:", loginError.trim());
+    await page.screenshot({ path: "test-results/sf-login-error.png", fullPage: true });
+  }
+
   await completeIdentityVerificationIfPresent(page, emailCode, totpSecret);
 
   const finishLoginLink = page.getByRole("link", { name: /finish logging in/i }).first();
