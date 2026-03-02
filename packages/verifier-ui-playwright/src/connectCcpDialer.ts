@@ -94,8 +94,10 @@ export async function dialFromConnectCcp(input: ConnectCcpDialInput): Promise<Co
   }
 
   await page.goto(input.ccpUrl, { waitUntil: "domcontentloaded" });
-  await waitForCcpReady(page, 45_000);
-  await ensureAgentAvailable(page, 20_000);
+  const ccpReadyTimeoutMs = Number(process.env.CCP_READY_TIMEOUT_SEC ?? 45) * 1000;
+  const ccpAgentAvailableTimeoutMs = Number(process.env.CCP_AGENT_AVAILABLE_TIMEOUT_SEC ?? 20) * 1000;
+  await waitForCcpReady(page, ccpReadyTimeoutMs);
+  await ensureAgentAvailable(page, ccpAgentAvailableTimeoutMs);
 
   const bodyText = (await page.locator("body").innerText().catch(() => "")).toLowerCase();
   if (bodyText.includes("session expired")) {
@@ -129,19 +131,22 @@ export async function dialFromConnectCcp(input: ConnectCcpDialInput): Promise<Co
     }
 
     if (steps.length > 0) {
-      await waitForConnectedCallReadyForDtmf(page, 15_000);
+      const ccpConnectedReadyTimeoutMs = Number(process.env.CCP_CONNECTED_READY_TIMEOUT_SEC ?? 15) * 1000;
+      await waitForConnectedCallReadyForDtmf(page, ccpConnectedReadyTimeoutMs);
 
       // In speech mode, only wait 2 seconds (enough for WebRTC to establish)
       // instead of 8 seconds which causes the detector to miss the IVR greeting.
       const minElapsedForSpeech = useSpeechMode ? 2 : (input.dtmfMinCallElapsedSec ?? 8);
+      const ccpCallElapsedTimeoutMs = Number(process.env.CCP_CALL_ELAPSED_TIMEOUT_SEC ?? 30) * 1000;
       await waitForCallElapsedAtLeast(
         page,
         Math.max(0, Math.floor(minElapsedForSpeech)),
-        30_000
+        ccpCallElapsedTimeoutMs
       );
 
       // Wait for the audio interceptor to capture the remote track
-      const audioReady = await waitForAudioReady(page, 15_000);
+      const ivrAudioReadyTimeoutMs = Number(process.env.IVR_AUDIO_READY_TIMEOUT_SEC ?? 15) * 1000;
+      const audioReady = await waitForAudioReady(page, ivrAudioReadyTimeoutMs);
       if (!audioReady) {
         console.warn(
           "[IVR-Speech] Audio interceptor not ready — falling back to timed DTMF."

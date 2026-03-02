@@ -35,6 +35,8 @@ import {
   hasIncomingUiIndicator,
   hasConnectedCallUiIndicator,
   waitForConnectedCallIndicator,
+  endActiveCallInSalesforce,
+  closeAllVoiceCallTabs,
   type IncomingSignalType,
 } from "../src/sfCallDetection";
 import {
@@ -113,17 +115,22 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
     const callTriggerMode = (process.env.CALL_TRIGGER_MODE ?? "twilio").toLowerCase();
     const callExpectation = (process.env.CALL_EXPECTATION ?? "agent_offer").toLowerCase();
     const serviceConsoleUrl = process.env.SF_SERVICE_CONSOLE_URL?.trim() || "";
-    const appName = process.env.SF_APP_NAME?.trim() || "Service Console";
-    const ringTimeoutSec = Number(process.env.VOICE_RING_TIMEOUT_SEC ?? 75);
+    const appName = process.env.SF_APP_NAME?.trim() || "";
+    if (!appName) {
+      throw new Error(
+        "SF_APP_NAME is not configured. Set the Agent Console App in Suite Settings vocabulary (agentApp field)."
+      );
+    }
+    const ringTimeoutSec = Number(process.env.VOICE_RING_TIMEOUT_SEC ?? 180);
     const preflightDetailHoldSec = Number(process.env.PREFLIGHT_DETAIL_HOLD_SEC ?? 2);
     const postAcceptHoldSec = Number(process.env.VOICE_POST_ACCEPT_HOLD_SEC ?? 6);
     const transcriptEnabled = process.env.VERIFY_REALTIME_TRANSCRIPT === "true";
     const verifySupervisorQueue = isTruthyEnv(process.env.VERIFY_SUPERVISOR_QUEUE_WAITING);
     const supervisorQueueName = process.env.SUPERVISOR_QUEUE_NAME?.trim() || "";
-    const supervisorAppName = process.env.SUPERVISOR_APP_NAME?.trim() || "Supervisor Console";
+    const supervisorAppName = process.env.SUPERVISOR_APP_NAME?.trim() || "";
     const supervisorSurfaceName =
       process.env.SUPERVISOR_SURFACE_NAME?.trim() || supervisorAppName;
-    const supervisorTimeoutSec = Number(process.env.SUPERVISOR_QUEUE_WAIT_TIMEOUT_SEC ?? 90);
+    const supervisorTimeoutSec = Number(process.env.SUPERVISOR_QUEUE_WAIT_TIMEOUT_SEC ?? 180);
     const verifySupervisorAgentOffer =
       verifySupervisorQueue && !/^(false|0|no|off)$/i.test((process.env.VERIFY_SUPERVISOR_AGENT_OFFER ?? "true").trim());
     const supervisorAgentName =
@@ -187,6 +194,9 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
     await assertAuthenticatedConsolePage(page);
     await dismissSalesforceSetupDialogs(page);
     await ensureSalesforceApp(page, appName);
+    // Close stale VoiceCall tabs from prior scenarios before preflight.
+    // Leftover tabs can hold the agent in ACW/Offline and block Omni recovery.
+    await closeAllVoiceCallTabs(page).catch(() => 0);
     await ensurePhoneUtilityOpen(page);
     const uiReadiness = await collectUiReadiness(page, appName);
     test.info().annotations.push({
@@ -438,7 +448,7 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
         );
       const supervisorBeforeAcceptWaitMs = Math.max(
         0,
-        Number(process.env.SUPERVISOR_BEFORE_ACCEPT_WAIT_MS ?? 3000)
+        Number(process.env.SUPERVISOR_BEFORE_ACCEPT_WAIT_MS ?? 7000)
       );
       let supervisorQueueSeen = false;
       if (queueObservationPromise) {
@@ -462,9 +472,7 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
         baselineMaxVoiceCallNumber,
         baselineInboxCount,
         targetStatus: process.env.OMNI_TARGET_STATUS?.trim() || "Available",
-        timeoutMs: verifySupervisorQueue
-          ? Math.max(ringTimeoutSec * 1000, Number(process.env.OFFER_AFTER_QUEUE_TIMEOUT_SEC ?? 90) * 1000)
-          : ringTimeoutSec * 1000,
+        timeoutMs: ringTimeoutSec * 1000,
         autoAccept: !requireSupervisorBeforeAccept,
         allowDeltaSignals: !verifySupervisorQueue || allowDeltaSignalsInSupervisor,
         shouldForceAccept: requireSupervisorBeforeAccept
@@ -778,6 +786,22 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
           contentType: "application/json"
         });
       }
+      // ── Post-call cleanup: end call, close tabs, log out of Omni ──
+      // This prevents stale tabs from accumulating across scenarios and
+      // ensures ACW completes so the agent returns to Available.
+      await endActiveCallInSalesforce(page).catch(() => undefined);
+      const closedTabs = await closeAllVoiceCallTabs(page).catch(() => 0);
+      if (closedTabs > 0) {
+        // After closing tabs, give Omni time to transition out of ACW
+        await page.waitForTimeout(1500);
+        await ensureOmniStatus(page, targetOmniStatus).catch(() => undefined);
+      }
+      // Set Omni-Channel to Offline before exiting so Salesforce releases the
+      // session cleanly. Without this, the next scenario's browser context
+      // triggers "You have logged in from another location" because SF still
+      // considers the old context active.
+      await ensureOmniStatus(page, "Offline").catch(() => undefined);
+
       await renderAssertionSummary(page, assertionLog, requiredAssertions, 2_000).catch(() => undefined);
       timeline.testEndMs = Date.now();
       const timelinePath = test.info().outputPath("e2e-timeline.json");

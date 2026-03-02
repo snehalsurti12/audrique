@@ -29,6 +29,9 @@ export function loadVocabularyEnv(profileId, suite) {
   if (sv.supervisorSurface) {
     env.SUPERVISOR_SURFACE_NAME = sv.supervisorSurface;
   }
+  if (sv.supervisorAppName) {
+    env.SUPERVISOR_APP_NAME = sv.supervisorAppName;
+  }
   if (sv.omniStatus) {
     env.OMNI_TARGET_STATUS = sv.omniStatus;
   }

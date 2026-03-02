@@ -120,6 +120,9 @@ export function scenarioToEnv(scenario, defaults = {}) {
   if (timeouts.supervisorPostQueueHoldSec != null) {
     env.SUPERVISOR_POST_QUEUE_HOLD_SEC = String(timeouts.supervisorPostQueueHoldSec);
   }
+  if (timeouts.supervisorBeforeAcceptWaitMs != null) {
+    env.SUPERVISOR_BEFORE_ACCEPT_WAIT_MS = String(timeouts.supervisorBeforeAcceptWaitMs);
+  }
 
   // ── Step-driven flags ────────────────────────────────────────────────
   // Default supervisor off; individual steps turn it on.

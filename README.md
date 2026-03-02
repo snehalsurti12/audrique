@@ -15,12 +15,21 @@
 
 ---
 
-## What's New in v0.3.0
+## What's New in v0.4.0
 
-- **Transcription-Driven IVR Navigation** — Local whisper.cpp (ggml-small, 466 MB, 99 languages) transcribes each IVR prompt in ~2.5 s, matches keywords (`"press 1|support"`), skips informational prompts, and sends DTMF only on match. Falls back to speech-silence detection when unavailable.
-- **Session Validity Gate** — Suite runner validates SF + Connect session files (existence, age, cookies) before running. Fails fast with clear instructions instead of wasting time on expired sessions. Bypass with `SKIP_SESSION_CHECK=true`.
-- **Reliable Multi-Prompt Audio** — Fixed WebM EBML header handling for consistent audio extraction across multiple IVR prompts.
-- **Streamlined Suite** — Default suite reduced to 3 proven scenarios (inbound, IVR routing, IVR timeout). All pass with supervisor verification and video evidence.
+- **Fully UI-Driven Configuration** — Removed all hardcoded org-specific values. CCP timeouts (5 settings), SF navigation timeouts (3 settings), and supervisor surface names are now configurable from Advanced Settings in Scenario Studio. Agent app name, supervisor app name, and queue names are set via Suite Settings vocabulary.
+- **Session Resilience** — HTTP liveness probes validate SF + Connect sessions before each suite run (not just file age checks). Stale Chromium processes are killed between scenarios to prevent "logged in from another location" conflicts. Session conflict banners are resolved via page reload instead of fragile button clicking.
+- **Two-Tab Supervisor Monitoring** — Supervisor observer opens a dedicated second tab for In-Progress Work, eliminating surface-switching delays and CTI adapter interference.
+- **Run from UI** — Select a suite in Scenario Studio and run directly from the browser. Auto-refreshes expired sessions, streams live output via SSE, and shows per-scenario status cards.
+
+<details>
+<summary>v0.3.0 highlights</summary>
+
+- **Transcription-Driven IVR Navigation** — Local whisper.cpp (ggml-small, 466 MB, 99 languages) transcribes each IVR prompt in ~2.5 s, matches keywords, sends DTMF only on match.
+- **Session Validity Gate** — Suite runner validates SF + Connect session files before running. Fails fast with clear instructions.
+- **Reliable Multi-Prompt Audio** — Fixed WebM EBML header handling for consistent audio extraction.
+- **Streamlined Suite** — Default suite reduced to 3 proven scenarios.
+</details>
 
 <details>
 <summary>v0.2.0 highlights</summary>
@@ -69,7 +78,7 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 | **Multi-agent browser verification** | 3 parallel Playwright sessions (Agent, CCP, Supervisor) |
 | **Declarative scenario DSL** | JSON-based scenarios — no code to write |
 | **Visual Scenario Studio** | Drag-and-drop wizard builds scenarios at localhost:4200 |
-| **Advanced Settings UI** | 33 configurable timeouts, polling intervals, and behavior flags — all from the UI |
+| **Advanced Settings UI** | 40+ configurable timeouts, polling intervals, and behavior flags — all from the UI |
 | **Org auto-discovery** | SOQL-powered discovery of queues, skills, routing, business hours |
 | **Video evidence capture** | Parallel recording + FFmpeg merge with speed modulation and annotations |
 | **Natural language authoring** | Gherkin-style test authoring compiled to executable JSON |
@@ -219,7 +228,8 @@ npm run studio
 The Studio provides:
 - **Suite management** — Create, rename, delete test suites from the UI
 - **Connection management** — Configure Salesforce + Connect + Twilio connections with vault-backed or direct credentials
-- **Advanced Settings** — 33 configurable settings across 6 groups (call handling, supervisor monitoring, incoming detection, behavior flags, transcript timing, Playwright) — all from a collapsible UI, persisted to `system-settings.json`, injected into every suite run
+- **Advanced Settings** — 40+ configurable settings across 8 groups (call handling, CCP connection, SF navigation, supervisor monitoring, incoming detection, behavior flags, transcript timing, Playwright) — all from a collapsible UI, persisted to `system-settings.json`, injected into every suite run
+- **Run from UI** — Select a suite and run directly from the browser with live streaming output, auto-session refresh, and scenario status cards
 - **Vault integration** — HashiCorp Vault support with "Test Connection" verification, auto-populated secret references, and regulated mode enforcement
 - **Setup menu** — Salesforce-style gear dropdown consolidating Connections and Advanced Settings
 - Step-by-step wizard with call setup, IVR routing, agent verification
@@ -503,7 +513,7 @@ audrique/
 
 **Current release** supports Salesforce Service Cloud Voice + Amazon Connect. The architecture is **platform-agnostic by design** — the declarative scenario DSL, browser automation, and evidence pipeline are CRM-independent. Adding a new platform requires only a new verifier package and browser adapter.
 
-### Current Support (v0.3)
+### Current Support (v0.4)
 
 | Component | Technology | Status |
 |-----------|------------|--------|

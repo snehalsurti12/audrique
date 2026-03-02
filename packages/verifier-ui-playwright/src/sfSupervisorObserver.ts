@@ -30,6 +30,7 @@ export type SupervisorQueueObservation = {
 export type SupervisorQueueObserverSession = {
   context: BrowserContext;
   page: Page;
+  inProgressPage?: Page;
   queueName: string;
   baselineWaitingCount: number;
   baselineInProgressCount: number;
@@ -80,11 +81,12 @@ export async function startSupervisorQueueObserver(args: {
   // Center for Service") as an app target BEFORE falling back to "Service Console".
   // The previous approach tried "Service Console" first and succeeded immediately
   // (page was already there) — but stayed on the Home page without supervisor views.
+  const fallbackSurfaces = (process.env.SUPERVISOR_FALLBACK_SURFACES?.trim() || "")
+    .split(",").map(s => s.trim()).filter(Boolean);
   const appCandidates = [
     args.supervisorSurfaceName,
     args.supervisorAppName,
-    "Omni Supervisor",
-    "Command Center for Service",
+    ...fallbackSurfaces,
     args.appName
   ].filter((name) => name.trim().length > 0);
   try {
@@ -118,23 +120,31 @@ export async function startSupervisorQueueObserver(args: {
     : await readSupervisorQueueWaitingCount(page, args.queueName).catch(() => 0);
   let baselineInProgressCount = 0;
   let baselineInProgressSignature = "";
+  let inProgressPage: Page | undefined;
+
   if (allowInProgressFallback || skipQueueBacklog) {
-    if (skipQueueBacklog) {
-      await ensureSupervisorInProgressWorkSurfaceOpen(page);
-    } else {
-      await ensureSupervisorInProgressWorkSurfaceOpen(page).catch(() => undefined);
+    // Two-tab mode: open a dedicated page for In-Progress Work monitoring.
+    // This avoids surface-switching on one page (which was throttled to 10s
+    // to protect the CTI adapter). Each tab stays on its surface permanently.
+    inProgressPage = await context.newPage();
+    await gotoWithLightningRedirectTolerance(inProgressPage, args.targetUrl);
+    await assertAuthenticatedConsolePage(inProgressPage);
+    try {
+      await ensureAnySalesforceApp(inProgressPage, appCandidates);
+    } catch {
+      await dismissPresenceAppSwitchBanner(inProgressPage);
     }
-    const inProgressBaseline = await readSupervisorInProgressWorkSnapshot(page, args.queueName);
+    await ensureOmniSupervisorSurfaceOpen(inProgressPage, args.queueName, args.supervisorSurfaceName).catch(() => undefined);
+    await ensureSupervisorInProgressWorkSurfaceOpen(inProgressPage);
+    const inProgressBaseline = await readSupervisorInProgressWorkSnapshot(inProgressPage, args.queueName);
     baselineInProgressCount = inProgressBaseline.inProgressCount;
     baselineInProgressSignature = inProgressBaseline.signature;
-    if (!skipQueueBacklog) {
-      await ensureSupervisorQueuesBacklogSurfaceOpen(page, args.queueName).catch(() => undefined);
-    }
   }
+
   await renderSupervisorMonitorOverlay(
     page,
     `Supervisor monitor active${args.queueName ? ` (${args.queueName})` : ""}`,
-    `app=${resolvedApp} | baseline waiting=${baseline} | baseline in-progress=${baselineInProgressCount}`
+    `app=${resolvedApp} | baseline waiting=${baseline} | baseline in-progress=${baselineInProgressCount} | tabs=${inProgressPage ? 2 : 1}`
   );
 
   const observation = waitForSupervisorQueueWaiting(page, {
@@ -142,13 +152,15 @@ export async function startSupervisorQueueObserver(args: {
     timeoutMs: args.timeoutMs,
     baselineWaitingCount: baseline,
     baselineInProgressCount,
-    baselineInProgressSignature
+    baselineInProgressSignature,
+    inProgressPage,
   });
   observation.catch(() => undefined);
 
   const session: SupervisorQueueObserverSession = {
     context,
     page,
+    inProgressPage,
     queueName: args.queueName,
     baselineWaitingCount: baseline,
     baselineInProgressCount,
@@ -157,7 +169,10 @@ export async function startSupervisorQueueObserver(args: {
     videoPath: undefined,
     end: async () => {
       const video = page.video();
-      // Close only the page, not the shared context (agent still needs it).
+      // Close supervisor pages, not the shared context (agent still needs it).
+      if (inProgressPage) {
+        await inProgressPage.close().catch(() => undefined);
+      }
       await page.close();
       if (video) {
         const vPath = await video.path().catch(() => undefined);
@@ -191,11 +206,12 @@ export async function startSupervisorAgentObserver(args: {
   await gotoWithLightningRedirectTolerance(page, args.targetUrl);
   await assertAuthenticatedConsolePage(page);
   let resolvedApp = args.appName;
+  const fallbackSurfaces = (process.env.SUPERVISOR_FALLBACK_SURFACES?.trim() || "")
+    .split(",").map(s => s.trim()).filter(Boolean);
   const appCandidates = [
     args.supervisorSurfaceName,
     args.supervisorAppName,
-    "Omni Supervisor",
-    "Command Center for Service",
+    ...fallbackSurfaces,
     args.appName
   ].filter((name) => name.trim().length > 0);
   try {
@@ -368,7 +384,7 @@ export async function openSupervisorSurfaceFromAppLauncher(page: Page, surfaceNa
     .or(page.getByPlaceholder(/search apps|search apps and items/i))
     .first();
   if ((await search.count()) > 0 && (await search.isVisible().catch(() => false))) {
-    const query = surfaceName.trim() || "Command Center for Service";
+    const query = surfaceName.trim() || process.env.SUPERVISOR_DEFAULT_SEARCH_TERM?.trim() || "Supervisor";
     await search.fill(query).catch(() => undefined);
     await page.waitForTimeout(800);
   }
@@ -519,6 +535,136 @@ export async function ensureSupervisorInProgressWorkSurfaceOpen(page: Page): Pro
 
 // ── Observation polling ──────────────────────────────────────────────────────
 
+/**
+ * Dedicated poll loop for Queue Backlog surface on its own page.
+ * No surface switching — polls at full speed.
+ */
+async function pollQueueBacklog(
+  page: Page,
+  args: {
+    queueName: string;
+    baselineWaitingCount: number;
+    deadline: number;
+    pollIntervalMs: number;
+    navigateIntervalMs: number;
+  }
+): Promise<SupervisorQueueObservation> {
+  const acceptAnyWaiting = /^(true|1|yes|on)$/i.test(
+    (process.env.SUPERVISOR_ACCEPT_ANY_WAITING ?? "false").trim()
+  );
+  const requireTotalWaitingHeader = !/^(false|0|no|off)$/i.test(
+    (process.env.SUPERVISOR_REQUIRE_TOTAL_WAITING_HEADER ?? "true").trim()
+  );
+  const requireTableSource = !/^(false|0|no|off)$/i.test(
+    (process.env.SUPERVISOR_REQUIRE_TABLE_SOURCE ?? "true").trim()
+  );
+  let lastSource = "unknown";
+  let lastNavigateAttemptMs = 0;
+
+  while (Date.now() < args.deadline) {
+    const snapshot = await readSupervisorQueueSnapshot(page, args.queueName);
+    lastSource = snapshot.source;
+
+    const sourceAllowed =
+      !requireTableSource ||
+      (snapshot.source.startsWith("table:") &&
+        (!requireTotalWaitingHeader || /total\s*waiting/i.test(snapshot.source)));
+
+    if (
+      sourceAllowed &&
+      (snapshot.waitingCount > Math.max(0, args.baselineWaitingCount) ||
+        (acceptAnyWaiting && snapshot.waitingCount > 0))
+    ) {
+      const observed: SupervisorQueueObservation = {
+        queueName: snapshot.queueName,
+        metric: "queue_waiting",
+        observedCount: snapshot.waitingCount,
+        waitingCount: snapshot.waitingCount,
+        source: snapshot.source,
+        observedAtMs: Date.now()
+      };
+      await renderSupervisorMonitorOverlay(
+        page,
+        "Queue wait observed",
+        `queue=${observed.queueName || "detected"}, waiting=${observed.observedCount}`
+      );
+      return observed;
+    }
+
+    if (
+      lastSource === "table_missing" &&
+      Date.now() - lastNavigateAttemptMs > args.navigateIntervalMs
+    ) {
+      await ensureSupervisorQueuesBacklogSurfaceOpen(page, args.queueName).catch(() => undefined);
+      lastNavigateAttemptMs = Date.now();
+    }
+
+    await page.waitForTimeout(args.pollIntervalMs);
+  }
+
+  throw new Error(`pollQueueBacklog: no observation before deadline`);
+}
+
+/**
+ * Dedicated poll loop for In-Progress Work surface on its own page.
+ * No surface switching — polls at full speed (no 10s throttle needed).
+ */
+async function pollInProgressWork(
+  page: Page,
+  args: {
+    queueName: string;
+    baselineInProgressCount: number;
+    baselineInProgressSignature: string;
+    deadline: number;
+    pollIntervalMs: number;
+  }
+): Promise<SupervisorQueueObservation> {
+  const requireInProgressIncrease = !/^(false|0|no|off)$/i.test(
+    (process.env.SUPERVISOR_IN_PROGRESS_REQUIRE_INCREASE ?? "true").trim()
+  );
+  const allowSignatureOnly = /^(true|1|yes|on)$/i.test(
+    (process.env.SUPERVISOR_ALLOW_SIGNATURE_ONLY ?? "false").trim()
+  );
+
+  while (Date.now() < args.deadline) {
+    const inProgressSnapshot = await readSupervisorInProgressWorkSnapshot(page, args.queueName);
+    const inProgressCount = inProgressSnapshot.inProgressCount;
+    const signatureChanged =
+      Boolean(inProgressSnapshot.signature) &&
+      Boolean(args.baselineInProgressSignature) &&
+      inProgressSnapshot.signature !== args.baselineInProgressSignature;
+    const inProgressIncreased = inProgressCount > Math.max(0, args.baselineInProgressCount);
+    const inProgressPositive = inProgressCount > 0;
+    const inProgressMatched = requireInProgressIncrease ? inProgressIncreased : inProgressPositive;
+
+    if (inProgressMatched || (allowSignatureOnly && signatureChanged)) {
+      const inProgressSource = inProgressMatched
+        ? "in_progress_table"
+        : "in_progress_signature_change";
+      const observed: SupervisorQueueObservation = {
+        queueName: inProgressSnapshot.queueName || args.queueName,
+        metric: "in_progress_work",
+        observedCount: inProgressCount,
+        waitingCount: inProgressCount,
+        source: inProgressSource,
+        observedAtMs: Date.now()
+      };
+      await renderSupervisorMonitorOverlay(
+        page,
+        "In-progress work observed",
+        `queue=${observed.queueName || "detected"}, in-progress=${observed.observedCount}, signature=${
+          inProgressSnapshot.signature || "n/a"
+        }`
+      );
+      return observed;
+    }
+
+    await page.waitForTimeout(args.pollIntervalMs);
+  }
+
+  throw new Error(`pollInProgressWork: no observation before deadline`);
+}
+
 export async function waitForSupervisorQueueWaiting(
   page: Page,
   args: {
@@ -527,11 +673,50 @@ export async function waitForSupervisorQueueWaiting(
     baselineWaitingCount: number;
     baselineInProgressCount: number;
     baselineInProgressSignature: string;
+    inProgressPage?: Page;
   }
 ): Promise<SupervisorQueueObservation> {
   const deadline = Date.now() + args.timeoutMs;
   const pollIntervalMs = Math.max(400, Number(process.env.SUPERVISOR_POLL_INTERVAL_MS ?? 1200));
   const navigateIntervalMs = Math.max(1500, Number(process.env.SUPERVISOR_NAVIGATION_INTERVAL_MS ?? 6000));
+  const allowInProgressFallback = !/^(false|0|no|off)$/i.test(
+    (process.env.SUPERVISOR_ALLOW_IN_PROGRESS_FALLBACK ?? "false").trim()
+  );
+  const skipQueueBacklog = /^(true|1|yes|on)$/i.test(
+    (process.env.SUPERVISOR_SKIP_QUEUE_BACKLOG ?? "false").trim()
+  );
+
+  // Two-tab mode: dedicated pages for each surface, poll in parallel
+  if (args.inProgressPage && (allowInProgressFallback || skipQueueBacklog)) {
+    const polls: Promise<SupervisorQueueObservation>[] = [];
+
+    if (!skipQueueBacklog) {
+      polls.push(
+        pollQueueBacklog(page, {
+          queueName: args.queueName,
+          baselineWaitingCount: args.baselineWaitingCount,
+          deadline,
+          pollIntervalMs,
+          navigateIntervalMs,
+        })
+      );
+    }
+
+    polls.push(
+      pollInProgressWork(args.inProgressPage, {
+        queueName: args.queueName,
+        baselineInProgressCount: args.baselineInProgressCount,
+        baselineInProgressSignature: args.baselineInProgressSignature,
+        deadline,
+        pollIntervalMs,
+      })
+    );
+
+    // Race: first surface to detect activity wins
+    return Promise.race(polls);
+  }
+
+  // Single-page fallback (original behavior when no inProgressPage provided)
   let lastWaitingCount = args.baselineWaitingCount;
   let lastInProgressCount = args.baselineInProgressCount;
   let lastInProgressSignature = args.baselineInProgressSignature;
@@ -544,12 +729,6 @@ export async function waitForSupervisorQueueWaiting(
   const inProgressCheckIntervalMs = Math.max(
     5000,
     Number(process.env.SUPERVISOR_IN_PROGRESS_CHECK_INTERVAL_MS ?? 10000)
-  );
-  const allowInProgressFallback = !/^(false|0|no|off)$/i.test(
-    (process.env.SUPERVISOR_ALLOW_IN_PROGRESS_FALLBACK ?? "false").trim()
-  );
-  const skipQueueBacklog = /^(true|1|yes|on)$/i.test(
-    (process.env.SUPERVISOR_SKIP_QUEUE_BACKLOG ?? "false").trim()
   );
   const acceptAnyWaiting = /^(true|1|yes|on)$/i.test(
     (process.env.SUPERVISOR_ACCEPT_ANY_WAITING ?? "false").trim()

@@ -3240,23 +3240,37 @@ async function createSuite() {
 
 const SYSTEM_SETTINGS_REGISTRY = [
   // Call Handling
-  { group: "callHandling", groupLabel: "Call Handling", envVar: "VOICE_RING_TIMEOUT_SEC", label: "Ring Timeout", type: "number", default: 75, unit: "sec", hint: "Max seconds waiting for call to arrive at agent", min: 10, max: 300, step: 5 },
+  { group: "callHandling", groupLabel: "Call Handling", envVar: "VOICE_RING_TIMEOUT_SEC", label: "Ring Timeout", type: "number", default: 180, unit: "sec", hint: "Max seconds waiting for call to arrive at agent", min: 10, max: 300, step: 5 },
   { group: "callHandling", envVar: "VOICE_POST_ACCEPT_HOLD_SEC", label: "Post-Accept Hold", type: "number", default: 6, unit: "sec", hint: "Pause after agent accepts call (video evidence capture)", min: 0, max: 30, step: 1 },
   { group: "callHandling", envVar: "PREFLIGHT_DETAIL_HOLD_SEC", label: "Preflight Hold", type: "number", default: 2, unit: "sec", hint: "Pause after preflight check before proceeding", min: 0, max: 15, step: 1 },
   { group: "callHandling", envVar: "PROVIDER_LOGIN_TIMEOUT_SEC", label: "Provider Login Timeout", type: "number", default: 60, unit: "sec", hint: "Timeout for Connect CCP login and warmup", min: 15, max: 180, step: 5 },
   { group: "callHandling", envVar: "PROVIDER_SYNC_WAIT_SEC", label: "Provider Sync Wait", type: "number", default: 20, unit: "sec", hint: "Wait for provider state sync before proceeding", min: 5, max: 60, step: 5 },
   { group: "callHandling", envVar: "CONNECT_DIAL_TIMEOUT_SEC", label: "Connect Dial Timeout", type: "number", default: 20, unit: "sec", hint: "Timeout for dialing to complete on Connect CCP", min: 10, max: 60, step: 5 },
 
+  // CCP Connection
+  { group: "ccpConnection", groupLabel: "CCP Connection", envVar: "CCP_READY_TIMEOUT_SEC", label: "CCP Ready Timeout", type: "number", default: 45, unit: "sec", hint: "Max seconds waiting for Connect CCP to initialize", min: 10, max: 120, step: 5 },
+  { group: "ccpConnection", envVar: "CCP_AGENT_AVAILABLE_TIMEOUT_SEC", label: "Agent Available Timeout", type: "number", default: 20, unit: "sec", hint: "Max seconds for CCP agent to become Available", min: 5, max: 60, step: 5 },
+  { group: "ccpConnection", envVar: "CCP_CONNECTED_READY_TIMEOUT_SEC", label: "Connected Call Ready Timeout", type: "number", default: 15, unit: "sec", hint: "Max seconds waiting for connected call state before DTMF", min: 5, max: 60, step: 5 },
+  { group: "ccpConnection", envVar: "CCP_CALL_ELAPSED_TIMEOUT_SEC", label: "Call Elapsed Max Timeout", type: "number", default: 30, unit: "sec", hint: "Max seconds waiting for call timer to reach minimum elapsed time", min: 10, max: 60, step: 5 },
+  { group: "ccpConnection", envVar: "IVR_AUDIO_READY_TIMEOUT_SEC", label: "IVR Audio Ready Timeout", type: "number", default: 15, unit: "sec", hint: "Max seconds for IVR audio interceptor to capture remote track", min: 5, max: 60, step: 5 },
+
+  // SF Navigation
+  { group: "sfNavigation", groupLabel: "Salesforce Navigation", envVar: "SF_LOGIN_ASSERTION_TIMEOUT_SEC", label: "Login Assertion Timeout", type: "number", default: 20, unit: "sec", hint: "Max seconds to confirm Salesforce login succeeded", min: 5, max: 60, step: 5 },
+  { group: "sfNavigation", envVar: "SF_APP_DETECT_TIMEOUT_SEC", label: "App Detect Timeout", type: "number", default: 5, unit: "sec", hint: "Max seconds to detect current Salesforce app", min: 2, max: 30, step: 1 },
+  { group: "sfNavigation", envVar: "SF_APP_SWITCH_TIMEOUT_SEC", label: "App Switch Timeout", type: "number", default: 7, unit: "sec", hint: "Max seconds to confirm app switch after navigation", min: 3, max: 30, step: 1 },
+
   // Supervisor Monitoring
-  { group: "supervisor", groupLabel: "Supervisor Monitoring", envVar: "SUPERVISOR_QUEUE_WAIT_TIMEOUT_SEC", label: "Queue Wait Timeout", type: "number", default: 90, unit: "sec", hint: "Timeout for supervisor to observe queue waiting", min: 30, max: 300, step: 10 },
-  { group: "supervisor", envVar: "OFFER_AFTER_QUEUE_TIMEOUT_SEC", label: "Offer After Queue Timeout", type: "number", default: 90, unit: "sec", hint: "Timeout for agent offer to appear after queue seen", min: 30, max: 300, step: 10 },
+  { group: "supervisor", groupLabel: "Supervisor Monitoring", envVar: "SUPERVISOR_QUEUE_WAIT_TIMEOUT_SEC", label: "Queue Wait Timeout", type: "number", default: 180, unit: "sec", hint: "Timeout for supervisor to observe queue waiting", min: 30, max: 300, step: 10 },
+  { group: "supervisor", envVar: "OFFER_AFTER_QUEUE_TIMEOUT_SEC", label: "Offer After Queue Timeout", type: "number", default: 180, unit: "sec", hint: "Timeout for agent offer to appear after queue seen", min: 30, max: 300, step: 10 },
   { group: "supervisor", envVar: "OBSERVER_FINALIZE_WAIT_SEC", label: "Observer Finalize Wait", type: "number", default: 5, unit: "sec", hint: "Cleanup time after observation completes", min: 1, max: 30, step: 1 },
   { group: "supervisor", envVar: "SUPERVISOR_POST_QUEUE_HOLD_SEC", label: "Post-Queue Hold", type: "number", default: 2, unit: "sec", hint: "Hold after supervisor completes queue observation", min: 0, max: 15, step: 1 },
-  { group: "supervisor", envVar: "SUPERVISOR_BEFORE_ACCEPT_WAIT_MS", label: "Before-Accept Wait", type: "number", default: 3000, unit: "ms", hint: "Time in supervisor loop before agent accepts call", min: 500, max: 10000, step: 500 },
+  { group: "supervisor", envVar: "SUPERVISOR_BEFORE_ACCEPT_WAIT_MS", label: "Before-Accept Wait", type: "number", default: 7000, unit: "ms", hint: "Time in supervisor loop before agent accepts call", min: 500, max: 10000, step: 500 },
   { group: "supervisor", envVar: "SUPERVISOR_POLL_INTERVAL_MS", label: "Queue Poll Interval", type: "number", default: 1200, unit: "ms", hint: "How often to poll supervisor queue table", min: 500, max: 5000, step: 100 },
   { group: "supervisor", envVar: "SUPERVISOR_NAVIGATION_INTERVAL_MS", label: "Navigation Retry Interval", type: "number", default: 6000, unit: "ms", hint: "Interval between supervisor surface navigation retries", min: 2000, max: 15000, step: 1000 },
   { group: "supervisor", envVar: "SUPERVISOR_AGENT_POLL_INTERVAL_MS", label: "Agent Offer Poll Interval", type: "number", default: 1200, unit: "ms", hint: "How often to poll for agent offer in supervisor", min: 500, max: 5000, step: 100 },
   { group: "supervisor", envVar: "SUPERVISOR_AGENT_NAVIGATION_INTERVAL_MS", label: "Agent Navigation Interval", type: "number", default: 6000, unit: "ms", hint: "Interval between agent offer surface navigation retries", min: 2000, max: 15000, step: 1000 },
+  { group: "supervisor", envVar: "SUPERVISOR_FALLBACK_SURFACES", label: "Fallback Surface Names", type: "text", default: "Omni Supervisor,Command Center for Service", hint: "Comma-separated supervisor app names to try when primary is not set" },
+  { group: "supervisor", envVar: "SUPERVISOR_DEFAULT_SEARCH_TERM", label: "Default Search Term", type: "text", default: "Supervisor", hint: "Default App Launcher search when no supervisor surface name is configured" },
 
   // Incoming Call Detection
   { group: "incomingDetection", groupLabel: "Incoming Call Detection", envVar: "INCOMING_CRITICAL_WINDOW_SEC", label: "Critical Window Duration", type: "number", default: 25, unit: "sec", hint: "Duration of fast-polling window around expected call arrival", min: 5, max: 60, step: 5 },
@@ -3466,6 +3480,11 @@ async function openSuiteSettingsModal() {
       <span class="form-hint">The tab/page name for supervisor monitoring in Salesforce</span>
     </div>
     <div class="form-group">
+      <label class="form-label">Supervisor App Name</label>
+      <input type="text" class="form-input" id="modal-suite-supervisor-app-name" value="${esc(vocab.supervisorAppName || "")}" placeholder="e.g., Supervisor Console" />
+      <span class="form-hint">The Salesforce app name for supervisor views (if different from surface name)</span>
+    </div>
+    <div class="form-group">
       <label class="form-label">Available Status</label>
       <select class="form-input" id="modal-suite-omni-status">
         <option value="">— Default —</option>
@@ -3560,6 +3579,7 @@ async function updateSuite() {
   const vocabulary = {
     agentApp: document.getElementById("modal-suite-agent-app")?.value || "",
     supervisorSurface: document.getElementById("modal-suite-supervisor-surface")?.value?.trim() || "",
+    supervisorAppName: document.getElementById("modal-suite-supervisor-app-name")?.value?.trim() || "",
     omniStatus: document.getElementById("modal-suite-omni-status")?.value || "",
     defaultQueue: document.getElementById("modal-suite-default-queue")?.value || "",
     supportQueue: document.getElementById("modal-suite-support-queue")?.value || "",

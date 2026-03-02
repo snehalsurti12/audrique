@@ -17,10 +17,10 @@
       "ivrMode": "speech"
     },
     "timeouts": {
-      "ringSec": 45,
-      "supervisorQueueSec": 45,
-      "supervisorAgentOfferSec": 45,
-      "offerAfterQueueSec": 60
+      "ringSec": 180,
+      "supervisorQueueSec": 180,
+      "supervisorAgentOfferSec": 180,
+      "offerAfterQueueSec": 180
     }
   },
   "scenarios": [
@@ -38,8 +38,7 @@
           "action": "trigger_call"
         },
         {
-          "action": "detect_incoming",
-          "timeoutSec": 60
+          "action": "detect_incoming"
         },
         {
           "action": "accept_call"
@@ -86,8 +85,7 @@
           "action": "trigger_call"
         },
         {
-          "action": "detect_incoming",
-          "timeoutSec": 60
+          "action": "detect_incoming"
         },
         {
           "action": "accept_call"
@@ -111,8 +109,8 @@
         }
       ],
       "timeouts": {
-        "ringSec": 60,
-        "supervisorPostQueueHoldSec": 4
+        "supervisorPostQueueHoldSec": 4,
+        "supervisorBeforeAcceptWaitMs": 7000
       }
     },
     {
@@ -136,8 +134,7 @@
           "action": "trigger_call"
         },
         {
-          "action": "detect_incoming",
-          "timeoutSec": 120
+          "action": "detect_incoming"
         },
         {
           "action": "accept_call"
@@ -161,9 +158,6 @@
         }
       ],
       "timeouts": {
-        "ringSec": 120,
-        "supervisorQueueSec": 120,
-        "offerAfterQueueSec": 120,
         "supervisorPostQueueHoldSec": 4
       }
     }

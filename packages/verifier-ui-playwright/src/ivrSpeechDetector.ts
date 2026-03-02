@@ -239,14 +239,19 @@ function getIvrAudioInjectionScript(silenceThresholdDb: number): string {
   const origAddEventListener = OrigRTC.prototype.addEventListener;
   let intercepted = false;
 
+  function tryIntercept(track) {
+    if (intercepted || !track || track.kind !== "audio") return;
+    intercepted = true;
+    console.log("[IVR-Audio] Intercepted remote audio track:", track.label, "readyState:", track.readyState);
+    const remoteStream = new MediaStream([track]);
+    startMonitoring(remoteStream);
+  }
+
+  // Strategy 1: Patch addEventListener("track", ...)
   OrigRTC.prototype.addEventListener = function (type, listener, options) {
     if (type === "track" && !intercepted) {
       const wrappedListener = function (event) {
-        if (!intercepted && event.track && event.track.kind === "audio") {
-          intercepted = true;
-          const remoteStream = new MediaStream([event.track]);
-          startMonitoring(remoteStream);
-        }
+        tryIntercept(event.track);
         if (typeof listener === "function") {
           listener.call(this, event);
         } else if (listener && typeof listener.handleEvent === "function") {
@@ -258,18 +263,14 @@ function getIvrAudioInjectionScript(silenceThresholdDb: number): string {
     return origAddEventListener.call(this, type, listener, options);
   };
 
-  // Also patch the ontrack setter
+  // Strategy 2: Patch ontrack setter
   const origOnTrackDescriptor = Object.getOwnPropertyDescriptor(OrigRTC.prototype, "ontrack");
   if (origOnTrackDescriptor && origOnTrackDescriptor.set) {
     const origSet = origOnTrackDescriptor.set;
     Object.defineProperty(OrigRTC.prototype, "ontrack", {
       set: function (handler) {
         const wrappedHandler = function (event) {
-          if (!intercepted && event.track && event.track.kind === "audio") {
-            intercepted = true;
-            const remoteStream = new MediaStream([event.track]);
-            startMonitoring(remoteStream);
-          }
+          tryIntercept(event.track);
           if (typeof handler === "function") {
             handler.call(this, event);
           }
@@ -280,6 +281,47 @@ function getIvrAudioInjectionScript(silenceThresholdDb: number): string {
       configurable: true,
     });
   }
+
+  // Strategy 3: Patch constructor + poll getReceivers() as fallback.
+  // CCP may use addTransceiver/getReceivers instead of track events.
+  const peerConnections = [];
+  window.RTCPeerConnection = function () {
+    const pc = new OrigRTC(...arguments);
+    peerConnections.push(pc);
+    console.log("[IVR-Audio] RTCPeerConnection created. Total:", peerConnections.length);
+    return pc;
+  };
+  window.RTCPeerConnection.prototype = OrigRTC.prototype;
+  // Preserve static methods and properties
+  Object.keys(OrigRTC).forEach(function (key) {
+    try { window.RTCPeerConnection[key] = OrigRTC[key]; } catch (e) {}
+  });
+
+  // Poll all peer connections for remote audio receivers
+  const receiverPollInterval = setInterval(function () {
+    if (intercepted) {
+      clearInterval(receiverPollInterval);
+      return;
+    }
+    for (let i = 0; i < peerConnections.length; i++) {
+      var pc = peerConnections[i];
+      try {
+        if (pc.connectionState === "closed") continue;
+        var receivers = pc.getReceivers();
+        for (var j = 0; j < receivers.length; j++) {
+          var track = receivers[j].track;
+          if (track && track.kind === "audio" && track.readyState === "live") {
+            console.log("[IVR-Audio] Found audio track via getReceivers() on PC", i);
+            tryIntercept(track);
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+  }, 200);
+
+  // Stop polling after 30s to avoid leaking
+  setTimeout(function () { clearInterval(receiverPollInterval); }, 30000);
 })();
 `;
 }

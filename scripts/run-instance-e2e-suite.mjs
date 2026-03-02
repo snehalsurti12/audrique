@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { isDeclarativeSuite, scenarioToEnv, printBridgeMapping } from "./scenario-bridge.mjs";
 import { loadVocabularyEnv, loadSystemSettingsEnv } from "./vocabularyLoader.mjs";
 
@@ -8,9 +8,19 @@ const DEFAULT_SUITE_FILE = "scenarios/e2e/full-suite.json";
 const DEFAULT_RESULTS_ROOT = path.resolve(process.cwd(), "test-results", "e2e-suite");
 const SESSION_MAX_AGE_MIN = parseInt(process.env.AUTH_MAX_AGE_MIN || "120", 10);
 
+// ── Kill stale Chromium processes between scenarios ──────────────────────────
+// Playwright should close browsers on exit, but if a prior run was killed
+// (Ctrl+C, Docker stop, OOM) a headless Chromium process can linger and hold
+// the Salesforce Omni-Channel session, causing "logged in from another location".
+function killStaleBrowsers() {
+  try {
+    execSync("pkill -f 'chromium.*--headless' 2>/dev/null || true", { stdio: "ignore" });
+  } catch { /* ignore – pkill returns non-zero when no process matched */ }
+}
+
 // ── Upfront session validity check ───────────────────────────────────────────
 
-function validateSessions() {
+async function validateSessions() {
   const sfStatePath = path.resolve(
     process.cwd(),
     process.env.SF_STORAGE_STATE || ".auth/sf-personal.json"
@@ -22,7 +32,8 @@ function validateSessions() {
 
   const errors = [];
 
-  // Check SF session
+  // ── SF session: file + cookie + liveness ──
+  let sfCookies = null;
   if (!fs.existsSync(sfStatePath)) {
     errors.push(`Salesforce session file missing: ${sfStatePath}`);
   } else {
@@ -31,7 +42,6 @@ function validateSessions() {
     if (ageMin > SESSION_MAX_AGE_MIN) {
       errors.push(`Salesforce session expired: ${ageMin} min old (max ${SESSION_MAX_AGE_MIN} min). File: ${sfStatePath}`);
     } else {
-      // Verify file has valid sid cookie
       try {
         const data = JSON.parse(fs.readFileSync(sfStatePath, "utf8"));
         const cookies = Array.isArray(data) ? data : data?.cookies;
@@ -39,7 +49,8 @@ function validateSessions() {
         if (!sid?.value) {
           errors.push(`Salesforce session file has no sid cookie: ${sfStatePath}`);
         } else {
-          console.log(`[session-check] SF session: OK (${ageMin} min old)`);
+          sfCookies = cookies;
+          console.log(`[session-check] SF session file: OK (${ageMin} min old)`);
         }
       } catch (e) {
         errors.push(`Salesforce session file is corrupt: ${e.message}`);
@@ -47,7 +58,8 @@ function validateSessions() {
     }
   }
 
-  // Check Connect session
+  // ── Connect session: file + cookie + liveness ──
+  let connectCookies = null;
   if (!fs.existsSync(connectStatePath)) {
     errors.push(`Connect CCP session file missing: ${connectStatePath}`);
   } else {
@@ -62,11 +74,38 @@ function validateSessions() {
         if (!cookies || cookies.length === 0) {
           errors.push(`Connect CCP session file has no cookies: ${connectStatePath}`);
         } else {
-          console.log(`[session-check] Connect session: OK (${ageMin} min old)`);
+          connectCookies = cookies;
+          console.log(`[session-check] Connect session file: OK (${ageMin} min old)`);
         }
       } catch (e) {
         errors.push(`Connect CCP session file is corrupt: ${e.message}`);
       }
+    }
+  }
+
+  // ── HTTP liveness probes (run in parallel) ──
+  if (sfCookies || connectCookies) {
+    const probes = [];
+    if (sfCookies) {
+      const sfUrl = (process.env.SF_INSTANCE_URL ?? "").trim();
+      if (sfUrl) {
+        probes.push(
+          httpLivenessProbe(sfUrl, sfCookies, "Salesforce")
+            .then(ok => { if (!ok) errors.push("Salesforce session cookies are invalid (HTTP probe returned redirect/401). Re-auth required."); })
+        );
+      }
+    }
+    if (connectCookies) {
+      const ccpUrl = (process.env.CONNECT_CCP_URL ?? "").trim();
+      if (ccpUrl) {
+        probes.push(
+          httpLivenessProbe(ccpUrl, connectCookies, "Connect CCP")
+            .then(ok => { if (!ok) errors.push("Connect CCP session cookies are invalid (HTTP probe returned redirect/401). Re-auth required."); })
+        );
+      }
+    }
+    if (probes.length > 0) {
+      await Promise.allSettled(probes);
     }
   }
 
@@ -85,12 +124,35 @@ function validateSessions() {
   console.log("[session-check] All sessions valid. Proceeding.\n");
 }
 
+/** Lightweight HTTP probe — sends a GET with session cookies and checks for 200 (not redirect to login). */
+async function httpLivenessProbe(url, cookies, label) {
+  try {
+    const cookieHeader = cookies
+      .map(c => `${c.name}=${c.value}`)
+      .join("; ");
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: { cookie: cookieHeader },
+      redirect: "manual",           // Don't follow redirects — a redirect means session is dead
+      signal: AbortSignal.timeout(10_000),
+    });
+    const ok = resp.status >= 200 && resp.status < 400 && resp.status !== 302 && resp.status !== 301;
+    console.log(`[session-check] ${label} HTTP probe: ${ok ? "OK" : "FAILED"} (status ${resp.status})`);
+    return ok;
+  } catch (e) {
+    console.warn(`[session-check] ${label} HTTP probe error: ${e.message}`);
+    // Network error doesn't necessarily mean session is bad — could be DNS/firewall in Docker.
+    // Don't fail hard on probe errors, just warn.
+    return true;
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
   // Gate: validate sessions before doing anything else
   if (!/^(1|true|yes|on)$/i.test((process.env.SKIP_SESSION_CHECK ?? "").trim())) {
-    validateSessions();
+    await validateSessions();
   }
 
   const suiteFile = path.resolve(
@@ -142,6 +204,10 @@ async function main() {
   }
 
   for (let index = 0; index < suite.scenarios.length; index += 1) {
+    // Kill any lingering Chromium from a prior scenario or crashed run so
+    // the next scenario gets a clean Salesforce/Omni-Channel session.
+    killStaleBrowsers();
+
     const scenario = suite.scenarios[index] ?? {};
     const id = String(scenario.id || `scenario-${index + 1}`);
     const description = String(scenario.description || "").trim();

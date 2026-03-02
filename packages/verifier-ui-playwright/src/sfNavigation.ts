@@ -75,7 +75,8 @@ export async function gotoWithLightningRedirectTolerance(page: Page, targetUrl: 
 // ── Login assertions ─────────────────────────────────────────────────────────
 
 export async function assertLoginSucceeded(page: Page): Promise<void> {
-  const deadline = Date.now() + 20_000;
+  const loginTimeoutMs = Number(process.env.SF_LOGIN_ASSERTION_TIMEOUT_SEC ?? 20) * 1000;
+  const deadline = Date.now() + loginTimeoutMs;
   while (Date.now() < deadline) {
     const url = page.url();
     const title = await page.title().catch(() => "");
@@ -206,7 +207,9 @@ export async function closeAppLauncherIfOpen(page: Page): Promise<void> {
 }
 
 export async function ensureSalesforceApp(page: Page, appName: string): Promise<void> {
-  if (await waitForSalesforceApp(page, appName, 5000)) {
+  const appDetectTimeoutMs = Number(process.env.SF_APP_DETECT_TIMEOUT_SEC ?? 5) * 1000;
+  const appSwitchTimeoutMs = Number(process.env.SF_APP_SWITCH_TIMEOUT_SEC ?? 7) * 1000;
+  if (await waitForSalesforceApp(page, appName, appDetectTimeoutMs)) {
     return;
   }
 
@@ -214,7 +217,7 @@ export async function ensureSalesforceApp(page: Page, appName: string): Promise<
   if (directAppUrl) {
     await page.goto(directAppUrl, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1200);
-    if (await waitForSalesforceApp(page, appName, 7000)) {
+    if (await waitForSalesforceApp(page, appName, appSwitchTimeoutMs)) {
       return;
     }
   }
@@ -270,7 +273,7 @@ export async function ensureSalesforceApp(page: Page, appName: string): Promise<
     }
   }
 
-  if (await waitForSalesforceApp(page, appName, 7000)) {
+  if (await waitForSalesforceApp(page, appName, appSwitchTimeoutMs)) {
     return;
   }
 

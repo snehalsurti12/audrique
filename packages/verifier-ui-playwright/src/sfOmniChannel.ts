@@ -832,26 +832,24 @@ export async function dismissPresenceAppSwitchBanner(page: Page): Promise<void> 
 }
 
 export async function dismissOmniAnotherLocationBanner(page: Page): Promise<void> {
-  // Salesforce shows "You have logged in from another location." with an X button
-  // when the same user session opens in a new browser context. This forces Omni
-  // to Offline and must be dismissed before status can be changed.
+  // Salesforce shows "You have logged in from another location." when the same
+  // user session opens in a new browser context. Clicking the close/dismiss button
+  // is NOT enough — the banner keeps reappearing because the server-side session
+  // conflict persists. The only reliable fix is a full page reload, which forces
+  // this browser to claim the session.
   const banner = page.getByText(/logged in from another location/i).first();
   if ((await banner.count()) === 0 || !(await banner.isVisible().catch(() => false))) {
     return;
   }
-  // The dismiss (X/close) button is in the same container as the banner text.
-  const container = banner.locator("xpath=ancestor::div[contains(@class,'slds-notify') or contains(@class,'notification') or position()<=3]").first();
-  const closeButton = container.locator("button").first();
-  if ((await closeButton.count()) > 0 && (await closeButton.isVisible().catch(() => false))) {
-    await closeButton.click({ force: true }).catch(() => undefined);
-    await page.waitForTimeout(500);
-    return;
-  }
-  // Fallback: find any close/dismiss button adjacent to the banner text.
-  const siblingClose = banner.locator("xpath=../button | ../../button").first();
-  if ((await siblingClose.count()) > 0) {
-    await siblingClose.click({ force: true }).catch(() => undefined);
-    await page.waitForTimeout(500);
+  console.log("[Omni] 'Logged in from another location' detected — reloading page to claim session.");
+  await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
+  await page.waitForTimeout(3000);
+
+  // Check if banner persisted after first reload
+  if ((await banner.count()) > 0 && (await banner.isVisible().catch(() => false))) {
+    console.log("[Omni] Banner persisted after reload — retrying.");
+    await page.reload({ waitUntil: "domcontentloaded" }).catch(() => undefined);
+    await page.waitForTimeout(3000);
   }
 }
 
