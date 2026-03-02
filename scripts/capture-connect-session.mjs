@@ -47,8 +47,11 @@ async function main() {
       }, null, 2));
       return;
     }
-    console.warn(`[connect-auth] Federation API failed: ${result.error}`);
-    console.warn("[connect-auth] Falling back to browser-based console auth...");
+    // When API credentials are explicitly configured, don't fall back to browser —
+    // the user chose API auth intentionally. Falling back would loop on sign-in
+    // with potentially invalid browser credentials.
+    console.error(`[connect-auth] Federation API failed: ${result.error}`);
+    throw new Error(`Federation API auth failed: ${result.error}`);
   }
 
   const browser = await chromium.launch({
@@ -1035,11 +1038,20 @@ function must(name) {
 }
 
 /**
- * Fast-path CCP auth via the Amazon Connect GetFederationToken API.
- * Returns a pre-authenticated SignInUrl — one page.goto() lands on CCP.
- * Falls back gracefully if the SDK isn't installed or the API call fails.
+ * Fast-path CCP auth via the Connect GetFederationToken API + cookie injection.
+ *
+ * Flow (no IAM password, no SAML, no browser sign-in):
+ *   1. Connect GetFederationToken API → CCP tokens (AccessToken + RefreshToken)
+ *   2. Inject tokens as lily-auth-* cookies on the Connect domain
+ *   3. Navigate to /ccp-v2/ → CCP loads with valid session
+ *
+ * IAM user needs: connect:GetFederationToken permission.
+ * The IAM user must also be added as a Connect user in the instance.
+ *
+ * Falls back gracefully if SDK isn't installed or any step fails.
  */
 async function tryFederationApiAuth(opts) {
+  // Step 1: Call Connect GetFederationToken to get CCP tokens
   let ConnectClient, GetFederationTokenCommand;
   try {
     const mod = await import("@aws-sdk/client-connect");
@@ -1049,7 +1061,7 @@ async function tryFederationApiAuth(opts) {
     return { success: false, error: "@aws-sdk/client-connect not installed" };
   }
 
-  let signInUrl;
+  let ccpCredentials, userArn;
   try {
     const client = new ConnectClient({
       region: opts.region,
@@ -1061,16 +1073,103 @@ async function tryFederationApiAuth(opts) {
     const resp = await client.send(
       new GetFederationTokenCommand({ InstanceId: opts.connectInstanceId })
     );
-    signInUrl = resp.SignInUrl;
-    if (!signInUrl) {
-      return { success: false, error: "GetFederationToken returned empty SignInUrl" };
+    ccpCredentials = resp.Credentials;
+    userArn = resp.UserArn || resp.UserId || "unknown";
+    if (!ccpCredentials?.AccessToken || !ccpCredentials?.RefreshToken) {
+      return { success: false, error: "GetFederationToken returned incomplete credentials" };
     }
-    console.log(`Federation token obtained. User: ${resp.UserArn || resp.UserId || "unknown"}`);
+    console.log(`CCP federation token obtained. User: ${userArn}`);
   } catch (err) {
     return { success: false, error: `GetFederationToken: ${err.name}: ${err.message}` };
   }
 
-  // Launch browser and navigate to the pre-authenticated URL
+  // Step 2: Derive the Connect instance host for cookie domain + CCP URL
+  const connectInstanceAlias = (process.env.CONNECT_INSTANCE_ALIAS || "").trim();
+  let connectHost = "";
+  if (connectInstanceAlias) {
+    connectHost = connectInstanceAlias.includes(".")
+      ? connectInstanceAlias
+      : `${connectInstanceAlias}.my.connect.aws`;
+  }
+  // If no alias configured, try to extract host from SignInUrl
+  if (!connectHost && ccpCredentials.SignInUrl) {
+    try {
+      connectHost = new URL(ccpCredentials.SignInUrl).host;
+    } catch { /* ignore */ }
+  }
+  if (!connectHost) {
+    return { success: false, error: "Cannot determine Connect host. Set CONNECT_INSTANCE_ALIAS." };
+  }
+  const resolvedCcpUrl = opts.ccpUrl || `https://${connectHost}/ccp-v2/`;
+
+  // Region code mapping for cookie names (lily-auth-prod-{regionCode})
+  const regionCodes = {
+    "us-east-1": "iad", "us-west-2": "pdx", "eu-west-2": "lhr",
+    "eu-central-1": "fra", "ap-southeast-1": "sin", "ap-southeast-2": "syd",
+    "ap-northeast-1": "nrt", "ap-northeast-2": "icn", "ca-central-1": "yul",
+    "af-south-1": "cpt", "me-south-1": "bah",
+  };
+  const regionCode = regionCodes[opts.region] || opts.region;
+
+  // Step 3: Build lily-auth-* cookies from the API tokens
+  const expiresSec = ccpCredentials.AccessTokenExpiration
+    ? Math.floor(new Date(ccpCredentials.AccessTokenExpiration).getTime() / 1000)
+    : Math.floor(Date.now() / 1000) + 3600;
+  // Refresh cookie gets a longer expiry (12h, matching observed behavior)
+  const refreshExpiresSec = expiresSec + 12 * 3600;
+  // Extract account ID from user ARN for lily-user-info
+  const accountIdMatch = (userArn || "").match(/:(\d{12}):/);
+  const accountId = accountIdMatch ? accountIdMatch[1] : "";
+  const userInfoB64 = accountId
+    ? Buffer.from(JSON.stringify({ accountId })).toString("base64")
+    : "";
+
+  const ccpCookies = [
+    {
+      name: `lily-auth-prod-${regionCode}`,
+      value: ccpCredentials.AccessToken,
+      domain: connectHost,
+      path: "/",
+      expires: expiresSec,
+      httpOnly: true,
+      secure: true,
+      sameSite: "None",
+    },
+    {
+      name: `lily-auth-refresh-prod-${regionCode}`,
+      value: ccpCredentials.RefreshToken,
+      domain: connectHost,
+      path: "/auth",
+      expires: refreshExpiresSec,
+      httpOnly: true,
+      secure: true,
+      sameSite: "None",
+    },
+    {
+      name: "lily-auth-exp",
+      value: "",
+      domain: connectHost,
+      path: "/",
+      expires: expiresSec,
+      httpOnly: false,
+      secure: true,
+      sameSite: "None",
+    },
+  ];
+  if (userInfoB64) {
+    ccpCookies.push({
+      name: "lily-user-info",
+      value: userInfoB64,
+      domain: connectHost,
+      path: "/",
+      expires: refreshExpiresSec,
+      httpOnly: true,
+      secure: true,
+      sameSite: "None",
+    });
+  }
+
+  // Step 4: Launch browser, inject cookies, navigate to CCP
   const browser = await chromium.launch({
     headless: opts.isHeadless ?? true,
     args: (opts.isHeadless ?? true)
@@ -1078,40 +1177,31 @@ async function tryFederationApiAuth(opts) {
       : [],
   });
   const context = await browser.newContext({ permissions: ["microphone"] });
+  await context.addCookies(ccpCookies);
   const page = await context.newPage();
 
   try {
-    await page.goto(signInUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
-    console.log(`Navigated to federation SignInUrl. Current: ${page.url()}`);
+    console.log(`Injected CCP auth cookies. Navigating to ${resolvedCcpUrl}`);
+    await page.goto(resolvedCcpUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await sleep(3000);
+    console.log(`Post-navigation URL: ${page.url()}`);
   } catch (err) {
     await browser.close();
-    return { success: false, error: `SignInUrl navigation failed: ${err.message}` };
+    return { success: false, error: `CCP navigation failed: ${err.message}` };
   }
 
-  // Derive CCP URL from page if not already known, then navigate
-  let resolvedCcpUrl = opts.ccpUrl || deriveCcpUrlFromUrl(page.url()) || "";
-  if (resolvedCcpUrl && !page.url().includes("/ccp-v2")) {
-    await page.goto(resolvedCcpUrl, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
-  }
-
-  // CCP health check loop — reuses existing readCcpState()
+  // Step 5: CCP health check loop
   const deadline = Date.now() + (opts.timeoutMs || 120_000);
   let consecutiveHealthy = 0;
   while (Date.now() < deadline) {
     const state = await readCcpState(page).catch(() => null);
     if (state) {
-      if (!resolvedCcpUrl) resolvedCcpUrl = deriveCcpUrlFromUrl(state.url) || "";
       await dismissInterruptingDialog(page).catch(() => {});
-
       if (state.isHealthy) {
         consecutiveHealthy++;
         if (consecutiveHealthy >= 3) break;
       } else {
         consecutiveHealthy = 0;
-        // If on Connect domain but not healthy, try navigating to CCP
-        if (state.isConnectDomain && resolvedCcpUrl) {
-          await page.goto(resolvedCcpUrl, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
-        }
       }
     } else {
       consecutiveHealthy = 0;
@@ -1122,10 +1212,10 @@ async function tryFederationApiAuth(opts) {
   if (consecutiveHealthy < 3) {
     await page.screenshot({ path: "test-results/connect-federation-timeout.png", fullPage: true }).catch(() => {});
     await browser.close();
-    return { success: false, error: "CCP did not become healthy after federation sign-in" };
+    return { success: false, error: "CCP did not become healthy after cookie injection" };
   }
 
-  // Capture session — same format as the browser-based flow
+  // Step 6: Capture session — same format as the browser-based flow
   fs.mkdirSync(path.dirname(opts.storagePath), { recursive: true });
   await context.storageState({ path: opts.storagePath });
   const cookies = await context.cookies();
