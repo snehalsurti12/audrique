@@ -18,7 +18,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/audrique"
+    "url": "https://github.com/snehalsurti12/audrique"
   },
   "bin": {
     "audrique": "./bin/audrique.mjs"
@@ -53,6 +53,9 @@
     "refresh-auth": "node scripts/refresh-auth.mjs",
     "test:ui": "playwright test",
     "test:ui:state": "SF_SKIP_LOGIN=true playwright test",
+    "youtube:record": "node scripts/record-youtube-walkthrough.mjs",
+    "youtube:build": "node scripts/build-youtube-video.mjs",
+    "youtube:full": "node scripts/record-youtube-walkthrough.mjs && node scripts/build-youtube-video.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run test:ui"
   },

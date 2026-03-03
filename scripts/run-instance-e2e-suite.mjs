@@ -7,6 +7,9 @@ import { loadVocabularyEnv, loadSystemSettingsEnv } from "./vocabularyLoader.mjs
 const DEFAULT_SUITE_FILE = "scenarios/e2e/full-suite.json";
 const DEFAULT_RESULTS_ROOT = path.resolve(process.cwd(), "test-results", "e2e-suite");
 const SESSION_MAX_AGE_MIN = parseInt(process.env.AUTH_MAX_AGE_MIN || "120", 10);
+const REFRESH_CCP_BETWEEN = /^(1|true|yes|on)$/i.test(
+  (process.env.E2E_REFRESH_CCP_BETWEEN_SCENARIOS ?? "").trim()
+);
 
 // ── Kill stale Chromium processes between scenarios ──────────────────────────
 // Playwright should close browsers on exit, but if a prior run was killed
@@ -190,6 +193,7 @@ async function main() {
   }
   console.log(`Suite config: ${suiteFile}`);
   console.log(`Suite format: ${suiteIsV2 ? "v2 (declarative steps)" : "v1 (env overrides)"}`);
+  console.log(`CCP refresh between scenarios: ${REFRESH_CCP_BETWEEN ? "ON" : "off"}`);
   console.log(`Results root: ${runDir}`);
   if (dryRun) {
     console.log("Dry-run mode enabled (E2E_SUITE_DRY_RUN=true).");
@@ -207,6 +211,22 @@ async function main() {
     // Kill any lingering Chromium from a prior scenario or crashed run so
     // the next scenario gets a clean Salesforce/Omni-Channel session.
     killStaleBrowsers();
+
+    // Optionally refresh CCP session between scenarios via federation API.
+    // Fast (~3-5s) when configured. Prevents token expiry across long suites.
+    // Enable: E2E_REFRESH_CCP_BETWEEN_SCENARIOS=true
+    if (REFRESH_CCP_BETWEEN && index > 0 && !dryRun) {
+      console.log(`  [ccp-refresh] Refreshing CCP session before scenario ${index + 1}...`);
+      const refreshCode = await runNode(
+        ["scripts/run-instance.mjs", "auth:connect-state"],
+        { ...process.env }
+      );
+      if (refreshCode !== 0) {
+        console.warn(`  [ccp-refresh] CCP refresh failed (exit ${refreshCode}). Continuing with existing session.`);
+      } else {
+        console.log(`  [ccp-refresh] CCP session refreshed.`);
+      }
+    }
 
     const scenario = suite.scenarios[index] ?? {};
     const id = String(scenario.id || `scenario-${index + 1}`);
