@@ -65,7 +65,7 @@
   <section class="hero">
     <div class="hero-inner">
       <div class="hero-badge">Open Source &middot; MIT License</div>
-      <h1>Automated Voice Testing<br/>for Contact Centers</h1>
+      <h1>Automated <span class="highlight">Voice Testing</span><br/>for Contact Centers</h1>
       <p class="hero-sub">
         Real calls. Real CRM verification. Real results.<br/>
         The first open-source tool that tests across telephony, CRM UI, and backend records simultaneously.
@@ -177,30 +177,39 @@
     <div class="container">
       <h2 class="section-title">How It Works</h2>
       <p class="section-sub">Three parallel streams coordinated by a single test scenario.</p>
-      <div class="architecture">
-        <pre class="arch-diagram">
-Test Scenario Starts
-  |
-  |-- Agent Stream (Playwright -> Salesforce Lightning)
-  |   |-- Login to Omni-Channel -> set status "Available"
-  |   |-- Wait for telephony provider sync -> "Connected"
-  |   |-- Wait for incoming call offer
-  |   |-- Accept the call
-  |   '-- Verify VoiceCall record screen pop
-  |
-  |-- CCP Stream (Playwright -> Amazon Connect CCP)
-  |   |-- Load CCP with federation token cookies
-  |   |-- Place outbound call via Twilio
-  |   |-- Navigate IVR: speech detection -> DTMF digits
-  |   '-- Monitor call state
-  |
-  |-- Supervisor Stream (Playwright -> Command Center)
-  |   |-- Open Queue Backlog + In-Progress Work tabs
-  |   |-- Poll both in parallel (Promise.any)
-  |   '-- Detect call in queue
-  |
-  '-- All three record video simultaneously
-      Timeline timestamps synchronize the recordings</pre>
+      <div class="call-flow">
+        <div class="flow-step">
+          <div class="flow-marker agent">SF</div>
+          <div class="flow-content">
+            <div class="flow-label">Agent Stream</div>
+            <h3>Salesforce Lightning &mdash; Playwright</h3>
+            <p>Login to Omni-Channel, sync telephony provider, wait for incoming call offer, accept, verify VoiceCall screen pop.</p>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-marker ccp">CCP</div>
+          <div class="flow-content">
+            <div class="flow-label">CCP Stream</div>
+            <h3>Amazon Connect CCP &mdash; Playwright</h3>
+            <p>Load CCP with federation token cookies. Place outbound call via Twilio. Navigate IVR with speech detection and DTMF digits.</p>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-marker sup">SUP</div>
+          <div class="flow-content">
+            <div class="flow-label">Supervisor Stream</div>
+            <h3>Command Center &mdash; Playwright</h3>
+            <p>Open Queue Backlog + In-Progress Work tabs. Poll both in parallel. Detect call routing to target queue.</p>
+          </div>
+        </div>
+        <div class="flow-step">
+          <div class="flow-marker agent" style="background: rgba(52, 211, 153, 0.12); color: #34d399; border-color: rgba(52, 211, 153, 0.3);">REC</div>
+          <div class="flow-content">
+            <div class="flow-label">Evidence</div>
+            <h3>Three Parallel Video Recordings</h3>
+            <p>All streams record simultaneously. Timeline timestamps synchronize the recordings into a single evidence video.</p>
+          </div>
+        </div>
       </div>
     </div>
   </section>
