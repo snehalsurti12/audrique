@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audrique — Automated Voice Testing for Contact Centers</title>
+  <meta name="description" content="Open-source automated voice testing framework for contact centers. Real calls, real CRM verification. Salesforce Service Cloud Voice + Amazon Connect + Twilio." />
+  <meta name="keywords" content="voice testing, contact center testing, salesforce testing, amazon connect, e2e testing, playwright, test automation, ivr testing, service cloud voice, twilio, call center QA, omnichannel testing, telephony testing" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Audrique — Automated Voice Testing for Contact Centers" />
+  <meta property="og:description" content="Open-source framework that orchestrates real voice calls, CRM verification, and supervisor monitoring in a single automated test." />
+  <meta property="og:image" content="https://img.youtube.com/vi/yukCm70mJ9s/maxresdefault.jpg" />
+  <meta property="og:url" content="https://audrique.com" />
+  <meta property="og:type" content="website" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Audrique — Automated Voice Testing for Contact Centers" />
+  <meta name="twitter:description" content="Open-source framework for end-to-end contact center voice testing. Real calls, real CRM verification." />
+  <meta name="twitter:image" content="https://img.youtube.com/vi/yukCm70mJ9s/maxresdefault.jpg" />
+
+  <!-- Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Audrique",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS, Windows",
+    "description": "Open-source automated voice testing framework for contact centers. Orchestrates real voice calls, CRM verification, and supervisor monitoring.",
+    "url": "https://audrique.com",
+    "downloadUrl": "https://github.com/snehalsurti12/audrique",
+    "license": "https://opensource.org/licenses/MIT",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── Nav ── -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="/" class="nav-logo">
+        <img src="logo.png" alt="Audrique" width="32" height="32" />
+        <span>Audrique</span>
+      </a>
+      <div class="nav-links">
+        <a href="#demo">Demo</a>
+        <a href="#features">Features</a>
+        <a href="#how-it-works">How It Works</a>
+        <a href="#quickstart">Quick Start</a>
+        <a href="https://github.com/snehalsurti12/audrique" class="btn-nav">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ── Hero ── -->
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="hero-badge">Open Source &middot; MIT License</div>
+      <h1>Automated Voice Testing<br/>for Contact Centers</h1>
+      <p class="hero-sub">
+        Real calls. Real CRM verification. Real results.<br/>
+        The first open-source tool that tests across telephony, CRM UI, and backend records simultaneously.
+      </p>
+      <div class="hero-actions">
+        <a href="https://github.com/snehalsurti12/audrique" class="btn btn-primary">Get Started</a>
+        <a href="#demo" class="btn btn-secondary">Watch Demo</a>
+      </div>
+      <div class="hero-tech">
+        <span>Salesforce SCV</span>
+        <span>Amazon Connect</span>
+        <span>Twilio</span>
+        <span>Playwright</span>
+        <span>Node.js</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Demo Video ── -->
+  <section id="demo" class="section">
+    <div class="container">
+      <h2 class="section-title">See It In Action</h2>
+      <p class="section-sub">Build a test scenario from scratch and watch it execute a real voice call end-to-end.</p>
+      <div class="video-wrap">
+        <iframe
+          width="100%" height="100%"
+          src="https://www.youtube.com/embed/yukCm70mJ9s"
+          title="Audrique — Automated Voice Testing for Contact Centers"
+          frameborder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowfullscreen>
+        </iframe>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Problem ── -->
+  <section class="section section-dark">
+    <div class="container">
+      <h2 class="section-title">The Problem</h2>
+      <p class="section-sub">Contact center voice testing is manual, slow, and siloed. Each tool covers one layer.</p>
+      <div class="grid-4">
+        <div class="problem-card">
+          <div class="problem-icon">UI</div>
+          <h3>UI Tools</h3>
+          <p>Test the CRM, but can't place real calls</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">TEL</div>
+          <h3>Telephony Scripts</h3>
+          <p>Make calls, but can't verify what the agent sees</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">API</div>
+          <h3>API Tools</h3>
+          <p>Query records, but can't coordinate timing</p>
+        </div>
+        <div class="problem-card">
+          <div class="problem-icon">QA</div>
+          <h3>Manual QA</h3>
+          <p>Expensive, slow, and non-reproducible</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Features ── -->
+  <section id="features" class="section">
+    <div class="container">
+      <h2 class="section-title">What Audrique Does</h2>
+      <p class="section-sub">One framework coordinates all three layers — because contact center bugs live at the boundaries.</p>
+      <div class="grid-3">
+        <div class="feature-card">
+          <div class="feature-num">1</div>
+          <h3>Visual Scenario Builder</h3>
+          <p>Build voice tests in a 7-step wizard. Configure IVR routing, supervisor monitoring, and assertions — no code required.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-num">2</div>
+          <h3>Real Voice Calls</h3>
+          <p>Places actual outbound calls through Amazon Connect + Twilio. Navigates IVR menus with speech detection and DTMF.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-num">3</div>
+          <h3>CRM Verification</h3>
+          <p>Verifies the Salesforce agent sees the right screen pop, call type, and VoiceCall record — all via Playwright.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-num">4</div>
+          <h3>Supervisor Monitoring</h3>
+          <p>Opens Command Center, monitors Queue Backlog and In-Progress Work tabs. Detects call routing in real time.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-num">5</div>
+          <h3>Three Video Streams</h3>
+          <p>Records agent, CCP, and supervisor screens simultaneously. Generates timeline-synced video evidence.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-num">6</div>
+          <h3>Session Management</h3>
+          <p>Federation API auth for Connect CCP — no SAML login. Auto-refresh expired sessions before each run.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── How It Works ── -->
+  <section id="how-it-works" class="section section-dark">
+    <div class="container">
+      <h2 class="section-title">How It Works</h2>
+      <p class="section-sub">Three parallel streams coordinated by a single test scenario.</p>
+      <div class="architecture">
+        <pre class="arch-diagram">
+Test Scenario Starts
+  |
+  |-- Agent Stream (Playwright -> Salesforce Lightning)
+  |   |-- Login to Omni-Channel -> set status "Available"
+  |   |-- Wait for telephony provider sync -> "Connected"
+  |   |-- Wait for incoming call offer
+  |   |-- Accept the call
+  |   '-- Verify VoiceCall record screen pop
+  |
+  |-- CCP Stream (Playwright -> Amazon Connect CCP)
+  |   |-- Load CCP with federation token cookies
+  |   |-- Place outbound call via Twilio
+  |   |-- Navigate IVR: speech detection -> DTMF digits
+  |   '-- Monitor call state
+  |
+  |-- Supervisor Stream (Playwright -> Command Center)
+  |   |-- Open Queue Backlog + In-Progress Work tabs
+  |   |-- Poll both in parallel (Promise.any)
+  |   '-- Detect call in queue
+  |
+  '-- All three record video simultaneously
+      Timeline timestamps synchronize the recordings</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Quick Start ── -->
+  <section id="quickstart" class="section">
+    <div class="container">
+      <h2 class="section-title">Quick Start</h2>
+      <p class="section-sub">Up and running in under 5 minutes.</p>
+      <div class="code-block">
+        <div class="code-header">Terminal</div>
+        <pre><code><span class="code-comment"># Clone the repo</span>
+git clone https://github.com/snehalsurti12/audrique.git
+cd audrique
+
+<span class="code-comment"># Install dependencies</span>
+npm install
+npx playwright install chromium
+
+<span class="code-comment"># Start Scenario Studio (visual builder)</span>
+npm run studio
+
+<span class="code-comment"># Open http://localhost:4200 and build your first test</span></code></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Roadmap ── -->
+  <section class="section section-dark">
+    <div class="container">
+      <h2 class="section-title">Roadmap</h2>
+      <div class="grid-2">
+        <div class="roadmap-card">
+          <h3>NL Caller</h3>
+          <p>AI-to-AI voice testing. LLM-driven customer simulates calls against Salesforce Agentforce.</p>
+        </div>
+        <div class="roadmap-card">
+          <h3>Pluggable Dialers</h3>
+          <p>Twilio, Vonage, Amazon Connect — swap telephony providers via config.</p>
+        </div>
+        <div class="roadmap-card">
+          <h3>Parallel Load Testing</h3>
+          <p>40-50+ simultaneous calls via agent pool federation.</p>
+        </div>
+        <div class="roadmap-card">
+          <h3>Multi-Platform</h3>
+          <p>ServiceNow, Zendesk, Genesys — same scenario DSL, different CRM.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── CTA ── -->
+  <section class="section cta-section">
+    <div class="container" style="text-align: center;">
+      <img src="logo.png" alt="Audrique" width="80" height="80" style="margin-bottom: 1.5rem;" />
+      <h2>Start Testing Voice Workflows Today</h2>
+      <p class="section-sub">Open source. MIT licensed. No vendor lock-in.</p>
+      <div class="hero-actions">
+        <a href="https://github.com/snehalsurti12/audrique" class="btn btn-primary">View on GitHub</a>
+        <a href="https://www.youtube.com/watch?v=yukCm70mJ9s" class="btn btn-secondary">Watch Demo</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Footer ── -->
+  <footer class="footer">
+    <div class="container footer-inner">
+      <p>&copy; 2026 Audrique. Open-source under MIT License.</p>
+      <div class="footer-links">
+        <a href="https://github.com/snehalsurti12/audrique">GitHub</a>
+        <a href="https://www.youtube.com/watch?v=yukCm70mJ9s">YouTube</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

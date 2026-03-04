@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6c5ce7"/>
+      <stop offset="100%" stop-color="#8577ed"/>
+    </linearGradient>
+  </defs>
+  <circle cx="16" cy="16" r="15" fill="#0f1117" stroke="url(#g)" stroke-width="1"/>
+  <!-- A legs -->
+  <path d="M11 26 L16 6 L21 26" stroke="url(#g)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Sound wave -->
+  <path d="M23 11 C26 13.5, 26 18.5, 23 21" stroke="#00cec9" stroke-width="1.5" stroke-linecap="round" fill="none" opacity="0.8"/>
+  <path d="M25.5 8.5 C30 12, 30 20, 25.5 23.5" stroke="#00cec9" stroke-width="1.2" stroke-linecap="round" fill="none" opacity="0.45"/>
+  <!-- Ear arc left -->
+  <path d="M9 11 C6 14, 5.5 18.5, 9 22" stroke="#8577ed" stroke-width="1.3" stroke-linecap="round" fill="none" opacity="0.5"/>
+  <!-- Signal dot -->
+  <circle cx="16" cy="5.5" r="1.2" fill="#00cec9"/>
+</svg>
