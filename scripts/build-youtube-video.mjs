@@ -9,7 +9,7 @@
  * Features:
  *   - 1920x1080 @ 30 FPS (YouTube HD)
  *   - H.264 + AAC output (optimal YouTube upload)
- *   - 10-chapter structure with YouTube timestamps
+ *   - 14-chapter structure with YouTube timestamps
  *   - Professional lower-third banners with Audrique branding
  *   - Speed modulation for setup/wait phases
  *   - Optional voiceover overlay
@@ -36,7 +36,9 @@ import {
   readTimeline,
   timelineToVideoSec,
   findSupervisorVideo,
+  findSupervisorInProgressVideo,
   buildAssertions,
+  buildCardWithLogo,
 } from "./lib/ffmpeg-helpers.mjs";
 
 const ffmpegPath = resolveFFmpeg();
@@ -98,6 +100,8 @@ function resolveArg(flag) {
 
 const outputFormat = resolveArg("--format") ?? "mp4";
 const voiceoverPath = resolveArg("--voiceover");
+const targetScenarioId = resolveArg("--scenario") ?? "ivr-support-queue-branch";
+const logoPath = path.resolve(process.cwd(), "webapp/public/logo-800x800.png");
 
 // ── Resolve inputs ────────────────────────────────────────────────────────
 
@@ -119,6 +123,16 @@ const suiteDir = resolveArg("--suite")
       .filter((d) => d.isDirectory() && !d.name.startsWith("_"))
       .map((d) => path.join(e2eRoot, d.name))
       .sort();
+    // Prefer a suite containing only the target scenario (YouTube demo suite)
+    for (const d of [...dirs].reverse()) {
+      const sp = path.join(d, "suite-summary.json");
+      if (!fs.existsSync(sp)) continue;
+      try {
+        const s = JSON.parse(fs.readFileSync(sp, "utf8"));
+        if (s.scenarios?.length === 1 && s.scenarios[0].id === targetScenarioId) return d;
+      } catch { /* ignore */ }
+    }
+    // Fallback: most recent
     return dirs.pop() ?? "";
   })();
 
@@ -304,65 +318,25 @@ console.log(`  Resolution:    ${W}x${H} @ ${FPS}fps`);
 console.log("");
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── Chapter 1: Hook/Intro (15s) ──────────────────────────────────────────
+// ── Chapter 1: Intro (8s, with logo) ─────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
 
 {
   const out = segPath("hook");
-  const passedCount = suite?.totals?.passed ?? "?";
-  const totalCount = suite?.totals?.scenarios ?? "?";
-
-  buildCard({
+  buildCardWithLogo(ffmpegPath, {
     output: out, duration: 8,
     bgColor: BRAND.bgPrimary,
+    w: W, h: H, fps: FPS,
+    logoPath, logoSize: 180, logoY: 160,
+    codecArgs: h264Out(),
     lines: [
-      { text: "Audrique", size: 64, color: BRAND.info, y: H / 2 - 120 },
-      { text: "Open-Source E2E Contact Center Testing", size: 28, color: BRAND.textPrimary, y: H / 2 - 40 },
-      { text: "Browser + Telephony + CRM — One Automated Test", size: 22, color: BRAND.textSecondary, y: H / 2 + 20 },
-      { text: `${totalCount} Scenarios | ${passedCount} Passed | Real Calls via Amazon Connect`, size: 18, color: BRAND.success, y: H / 2 + 80 },
-      { text: "Salesforce Service Cloud Voice", size: 14, color: BRAND.muted, y: H / 2 + 130 },
+      { text: "Audrique", size: 64, color: BRAND.info, y: 400 },
+      { text: "Open-Source E2E Contact Center Testing", size: 28, color: BRAND.textPrimary, y: 480 },
+      { text: "Browser + Telephony + CRM — One Automated Test", size: 22, color: BRAND.textSecondary, y: 530 },
+      { text: "Salesforce Service Cloud Voice", size: 14, color: BRAND.muted, y: 590 },
     ],
   });
   addSegment(out, "Intro");
-}
-
-// If we have E2E results, show a quick montage of key frames
-if (suite) {
-  const targetSc = suite.scenarios.find((sc) => sc.id === "ivr-support-queue-branch")
-    ?? suite.scenarios.find((sc) => sc.status === "passed");
-
-  if (targetSc) {
-    const sfVideo = targetSc.artifacts?.[0]?.salesforceVideo;
-    const tl = readTimeline(targetSc);
-    const ts = timelineToVideoSec(tl);
-
-    // Quick montage: 3 key moments at 2.5s each
-    if (sfVideo && fs.existsSync(sfVideo) && ts) {
-      const moments = [
-        { sec: ts.incomingDetected, label: "Incoming Call Detection" },
-        { sec: ts.acceptClicked, label: "Agent Accepts Call" },
-        { sec: ts.screenPopDetected, label: "VoiceCall Screen Pop" },
-      ].filter((m) => m.sec != null);
-
-      for (const m of moments) {
-        const out = segPath("montage");
-        buildSegment({
-          input: sfVideo, output: out,
-          label: `Montage: ${m.label}`,
-          startSec: Math.max(0, m.sec - 0.5),
-          durationSec: 2.5,
-          chapterLabel: "LIVE TEST",
-          detailText: m.label,
-          scaleFilter: e2eScale,
-        });
-        if (fs.existsSync(out)) {
-          segments.push(out);
-          // Don't create new chapter — still part of Intro
-          if (chapters.length > 0) chapters[chapters.length - 1].duration += 2.5;
-        }
-      }
-    }
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -415,14 +389,64 @@ if (suite) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── Chapters 3-5: Studio Walkthrough ─────────────────────────────────────
+// ── Chapter 3: Current Release (v0.4.0) ──────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const out = segPath("current-release");
+  buildCard({
+    output: out, duration: 12,
+    bgColor: BRAND.bgSecondary,
+    lines: [
+      { text: "v0.4.0 — Current Release", size: 38, color: BRAND.info, y: 100 },
+      { text: "UI-Driven Configuration", size: 22, color: BRAND.success, x: "200", y: 220 },
+      { text: "All org-specific settings configurable from Studio — zero hardcoded values", size: 16, color: BRAND.textSecondary, x: "200", y: 255 },
+      { text: "Session Resilience", size: 22, color: BRAND.success, x: "200", y: 320 },
+      { text: "HTTP liveness probes + auto-refresh before each suite run", size: 16, color: BRAND.textSecondary, x: "200", y: 355 },
+      { text: "Two-Tab Supervisor Monitoring", size: 22, color: BRAND.success, x: "200", y: 420 },
+      { text: "Dedicated In-Progress Work tab eliminates CTI adapter interference", size: 16, color: BRAND.textSecondary, x: "200", y: 455 },
+      { text: "Run from UI", size: 22, color: BRAND.success, x: "200", y: 520 },
+      { text: "Live SSE streaming output with per-scenario status cards", size: 16, color: BRAND.textSecondary, x: "200", y: 555 },
+      { text: "40+ Advanced Settings | 17 files | MIT License", size: 14, color: BRAND.muted, y: H - 80 },
+    ],
+  });
+  addSegment(out, "Current Release (v0.4.0)");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── Chapter 4: Roadmap ───────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+
+{
+  const out = segPath("roadmap");
+  buildCard({
+    output: out, duration: 12,
+    bgColor: BRAND.bgSecondary,
+    lines: [
+      { text: "Roadmap", size: 38, color: BRAND.info, y: 100 },
+      { text: "NL Caller — AI-to-AI Voice Testing", size: 22, color: BRAND.accentLight, x: "200", y: 220 },
+      { text: "LLM-driven customer simulates calls against Agentforce", size: 16, color: BRAND.textSecondary, x: "200", y: 255 },
+      { text: "Pluggable Dialers", size: 22, color: BRAND.accentLight, x: "200", y: 320 },
+      { text: "Twilio, Vonage, Amazon Connect — swap providers via config", size: 16, color: BRAND.textSecondary, x: "200", y: 355 },
+      { text: "Parallel Load Testing", size: 22, color: BRAND.accentLight, x: "200", y: 420 },
+      { text: "40-50+ simultaneous calls via agent pool federation", size: 16, color: BRAND.textSecondary, x: "200", y: 455 },
+      { text: "Multi-Platform", size: 22, color: BRAND.accentLight, x: "200", y: 520 },
+      { text: "ServiceNow, SAP, Zendesk, Genesys — same scenario DSL", size: 16, color: BRAND.textSecondary, x: "200", y: 555 },
+      { text: "AI-native testing platform — LLM scenario gen, voice AI, self-healing tests", size: 14, color: BRAND.muted, y: H - 80 },
+    ],
+  });
+  addSegment(out, "Roadmap");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── Chapters 5-7: Studio Walkthrough ─────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
 
 if (hasStudioVideo) {
   const stTs = studioTimelineToSec(youtubeTimeline);
   const fullDuration = getDuration(studioVideo, ffmpegPath);
 
-  // ── Chapter 3: Connection Setup (landing page segment) ──
+  // ── Chapter 5: Connection Setup (landing page segment) ──
   {
     const out = segPath("phase-setup-card");
     buildCard({
@@ -457,7 +481,7 @@ if (hasStudioVideo) {
     }
   }
 
-  // ── Chapter 4: Building a Test Scenario ──
+  // ── Chapter 6: Building a Test Scenario ──
   {
     const out = segPath("phase-build-card");
     buildCard({
@@ -538,7 +562,7 @@ if (hasStudioVideo) {
     }
   }
 
-  // ── Chapter 5: Launching the Test ──
+  // ── Chapter 7: Launching the Test ──
   if (stTs && stTs.runStart != null) {
     {
       const out = segPath("phase-run-card");
@@ -601,163 +625,166 @@ if (hasStudioVideo) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── Chapters 6-8: Live E2E Execution Evidence ────────────────────────────
+// ── Chapters 8-12: Live E2E Execution (real call lifecycle) ──────────────
 // ═══════════════════════════════════════════════════════════════════════════
 
 if (suite) {
-  // Find the IVR support queue scenario (focal scenario for the video)
-  const targetSc = suite.scenarios.find((sc) => sc.id === "ivr-support-queue-branch")
+  const targetSc = suite.scenarios.find((sc) => sc.id === targetScenarioId)
     ?? suite.scenarios.find((sc) => sc.status === "passed");
 
   if (targetSc) {
     const sfVideo = targetSc.artifacts?.[0]?.salesforceVideo;
     const ccpVideo = targetSc.artifacts?.[0]?.ccpVideo;
     const supervisorVideo = findSupervisorVideo(targetSc);
+    const supervisorInProgressVideo = findSupervisorInProgressVideo(targetSc);
     const tl = readTimeline(targetSc);
     const ts = timelineToVideoSec(tl);
 
     const hasSf = sfVideo && fs.existsSync(sfVideo);
     const hasCcp = ccpVideo && fs.existsSync(ccpVideo);
     const hasSupervisor = supervisorVideo && fs.existsSync(supervisorVideo);
+    const hasSupervisorInProgress = supervisorInProgressVideo && fs.existsSync(supervisorInProgressVideo);
 
     console.log(`\n  Target scenario: ${targetSc.id} (${targetSc.status})`);
-    console.log(`    SF: ${!!hasSf}  CCP: ${!!hasCcp}  Supervisor: ${!!hasSupervisor}  Timeline: ${!!ts}`);
+    console.log(`    SF: ${!!hasSf}  CCP: ${!!hasCcp}  Supervisor: ${!!hasSupervisor}  InProgress: ${!!hasSupervisorInProgress}  Timeline: ${!!ts}`);
 
-    // ── Chapter 6: Salesforce Call Arrival ──
-    if (hasSf && ts && ts.incomingDetected != null) {
+    // ── Chapter 8: Agent Goes Online ──
+    if (hasSf && ts && ts.preflightReady != null) {
       {
-        const out = segPath("phase-sf-card");
+        const out = segPath("phase-agent-card");
         buildCard({
           output: out, duration: 3,
           bgColor: BRAND.bgSecondary,
           lines: [
-            { text: "Salesforce Call Arrival", size: 18, color: BRAND.info, y: H / 2 - 50 },
-            { text: "Agent Receives Incoming Call", size: 34, color: BRAND.textPrimary, y: H / 2 - 10 },
-            { text: "Omni-Channel notification in Service Console", size: 16, color: BRAND.muted, y: H / 2 + 35 },
+            { text: "Agent Goes Online", size: 18, color: BRAND.info, y: H / 2 - 50 },
+            { text: "Omni-Channel Login + Provider Status Sync", size: 34, color: BRAND.textPrimary, y: H / 2 - 10 },
+            { text: "Agent becomes available for incoming calls", size: 16, color: BRAND.muted, y: H / 2 + 35 },
           ],
         });
-        addSegment(out, "Salesforce Call Arrival");
+        addSegment(out, "Agent Goes Online");
       }
 
-      // Show preflight at 3x (first time seeing SF)
-      if (ts.preflightReady > 5) {
-        const out = segPath("sf-preflight");
-        buildSegment({
-          input: sfVideo, output: out,
-          label: `SF preflight (${SPEED.preflight}x)`,
-          startSec: 0, durationSec: ts.preflightReady,
-          speed: SPEED.preflight,
-          chapterLabel: "SALESFORCE",
-          detailText: `Preflight setup (${SPEED.preflight}x speed)`,
-          scaleFilter: e2eScale,
-        });
-        if (fs.existsSync(out)) {
-          segments.push(out);
-          if (chapters.length > 0) chapters[chapters.length - 1].duration += ts.preflightReady / SPEED.preflight;
-        }
-      }
-
-      // CCP dial at 2x
-      if (hasCcp) {
-        const out = segPath("ccp-dial");
-        buildSegment({
-          input: ccpVideo, output: out,
-          label: `CCP dial (${SPEED.ccpDial}x)`,
-          speed: SPEED.ccpDial,
-          chapterLabel: "CCP DIALER",
-          detailText: `Amazon Connect outbound dial (${SPEED.ccpDial}x speed)`,
-          scaleFilter: e2eScale,
-        });
-        if (fs.existsSync(out)) {
-          segments.push(out);
-          const ccpDur = getDuration(ccpVideo, ffmpegPath);
-          if (chapters.length > 0) chapters[chapters.length - 1].duration += ccpDur / SPEED.ccpDial;
-        }
-      }
-
-      // Dead wait at 6x
-      if (ts.ccpDialConfirmed != null && ts.incomingDetected != null) {
-        const deadDur = ts.incomingDetected - ts.ccpDialConfirmed;
-        if (deadDur > 3) {
-          const out = segPath("dead-wait");
-          buildSegment({
-            input: sfVideo, output: out,
-            label: `Dead wait (${SPEED.deadWait}x)`,
-            startSec: ts.ccpDialConfirmed, durationSec: deadDur,
-            speed: SPEED.deadWait,
-            chapterLabel: "WAITING",
-            detailText: `Call routing through IVR (${SPEED.deadWait}x speed)`,
-            scaleFilter: e2eScale,
-          });
-          if (fs.existsSync(out)) {
-            segments.push(out);
-            if (chapters.length > 0) chapters[chapters.length - 1].duration += deadDur / SPEED.deadWait;
-          }
-        }
-      }
-
-      // Call arrival at 1x (the key moment)
-      const arrivalStart = Math.max(0, ts.incomingDetected - 1);
-      const arrivalEnd = ts.acceptClicked ?? ts.incomingDetected + 5;
-      const arrivalDur = arrivalEnd - arrivalStart;
-      {
-        const out = segPath("call-arrival");
-        buildSegment({
-          input: sfVideo, output: out,
-          label: "Call arrival (1x)",
-          startSec: arrivalStart, durationSec: Math.min(arrivalDur, 15),
-          chapterLabel: "INCOMING CALL",
-          detailText: "Call arrives on Salesforce agent — Omni-Channel notification",
-          scaleFilter: e2eScale,
-        });
-        if (fs.existsSync(out)) {
-          segments.push(out);
-          if (chapters.length > 0) chapters[chapters.length - 1].duration += Math.min(arrivalDur, 15);
-        }
+      const preflightDur = ts.preflightReady + 3;
+      const out = segPath("omni-login");
+      buildSegment({
+        input: sfVideo, output: out,
+        label: "Omni-Channel login (2x)",
+        startSec: 0, durationSec: preflightDur,
+        speed: 2,
+        chapterLabel: "AGENT ONLINE",
+        detailText: "Omni-Channel login and telephony provider sync (2x speed)",
+        scaleFilter: e2eScale,
+      });
+      if (fs.existsSync(out)) {
+        segments.push(out);
+        if (chapters.length > 0) chapters[chapters.length - 1].duration += preflightDur / 2;
       }
     }
 
-    // ── Chapter 7: Supervisor Console ──
-    if (hasSupervisor && tl) {
+    // ── Chapter 9: CCP Outbound Dial ──
+    if (hasCcp) {
+      {
+        const out = segPath("phase-ccp-card");
+        buildCard({
+          output: out, duration: 3,
+          bgColor: BRAND.bgSecondary,
+          lines: [
+            { text: "CCP Outbound Dial", size: 18, color: BRAND.info, y: H / 2 - 50 },
+            { text: "Amazon Connect Places the Call", size: 34, color: BRAND.textPrimary, y: H / 2 - 10 },
+            { text: "Twilio call routed through IVR to target queue", size: 16, color: BRAND.muted, y: H / 2 + 35 },
+          ],
+        });
+        addSegment(out, "CCP Outbound Dial");
+      }
+
+      const out = segPath("ccp-dial");
+      buildSegment({
+        input: ccpVideo, output: out,
+        label: `CCP dial (${SPEED.ccpDial}x)`,
+        speed: SPEED.ccpDial,
+        chapterLabel: "CCP DIALER",
+        detailText: `Amazon Connect outbound dial (${SPEED.ccpDial}x speed)`,
+        scaleFilter: e2eScale,
+      });
+      if (fs.existsSync(out)) {
+        segments.push(out);
+        const ccpDur = getDuration(ccpVideo, ffmpegPath);
+        if (chapters.length > 0) chapters[chapters.length - 1].duration += ccpDur / SPEED.ccpDial;
+      }
+    }
+
+    // ── Chapter 10: Supervisor Console ──
+    // Prefer In-Progress Work video (shows count=1 reliably) over Queue Backlog
+    // (Total Waiting often stays 0 for fast-routing scenarios).
+    const useSupervisorInProgress = hasSupervisorInProgress;
+    const supervisorSource = useSupervisorInProgress ? supervisorInProgressVideo : supervisorVideo;
+    const hasSupervisorAny = hasSupervisor || hasSupervisorInProgress;
+
+    if (hasSupervisorAny) {
       {
         const out = segPath("phase-supervisor-card");
+        const subtitle = useSupervisorInProgress
+          ? "In-Progress Work — Active Call Detected"
+          : "Call Enters Queue — Waiting Count Increases";
+        const detail = useSupervisorInProgress
+          ? "Command Center In-Progress Work monitoring"
+          : "Command Center real-time queue monitoring";
         buildCard({
           output: out, duration: 3,
           bgColor: BRAND.bgSecondary,
           lines: [
             { text: "Supervisor Console", size: 18, color: BRAND.info, y: H / 2 - 50 },
-            { text: "Queue Monitoring in Command Center", size: 34, color: BRAND.textPrimary, y: H / 2 - 10 },
-            { text: "Real-time queue waiting and in-progress observation", size: 16, color: BRAND.muted, y: H / 2 + 35 },
+            { text: subtitle, size: 34, color: BRAND.textPrimary, y: H / 2 - 10 },
+            { text: detail, size: 16, color: BRAND.muted, y: H / 2 + 35 },
           ],
         });
         addSegment(out, "Supervisor Console");
       }
 
-      const startedMs = Number(tl.supervisorObserverStartedMs ?? 0);
-      const observedMs = Number(tl.supervisorQueueObservedMs ?? 0);
-      if (startedMs > 0 && observedMs > startedMs) {
-        const observedAt = (observedMs - startedMs) / 1000;
-        const segStart = Math.max(0, observedAt - 8);
-        const segDur = Math.max(6, observedAt + 5 - segStart);
+      const supDuration = getDuration(supervisorSource, ffmpegPath);
+      const startedMs = Number(tl?.supervisorObserverStartedMs ?? 0);
+      const observedMs = Number(tl?.supervisorQueueObservedMs ?? 0);
 
-        const out = segPath("supervisor");
-        buildSegment({
-          input: supervisorVideo, output: out,
-          label: "Supervisor observation (1x)",
-          startSec: segStart, durationSec: segDur,
-          chapterLabel: "SUPERVISOR",
-          detailText: "Queue waiting count changes — call detected",
-          scaleFilter: e2eScale,
-        });
-        if (fs.existsSync(out)) {
-          segments.push(out);
-          if (chapters.length > 0) chapters[chapters.length - 1].duration += segDur;
-        }
+      let segStart = 0;
+      let segDur = Math.min(supDuration, 20);
+
+      if (startedMs > 0 && observedMs > startedMs) {
+        // The DOM-level detection (observedMs) fires several seconds before the
+        // page visually refreshes to show the updated count.  For in-progress
+        // work, the visual refresh lag is ~8-10s after the DOM observation.
+        // Start a few seconds before the visual change and extend well past it
+        // so the viewer sees the count flip from 0 → 1.
+        const observedAt = (observedMs - startedMs) / 1000;
+        const visualLag = useSupervisorInProgress ? 10 : 5;
+        const idealEnd = observedAt + visualLag + 5;  // show 5s after visual change
+        // Start ~5s before the visual change becomes visible
+        segStart = Math.max(0, observedAt + visualLag - 5);
+        segDur = Math.min(supDuration - segStart, idealEnd - segStart, 25);
+      }
+
+      const out = segPath("supervisor-queue");
+      const supLabel = useSupervisorInProgress
+        ? "Supervisor in-progress observation (1x)"
+        : "Supervisor queue observation (1x)";
+      const supDetail = useSupervisorInProgress
+        ? "In-Progress Work — active call detected on agent"
+        : "Queue waiting count changes — call detected in queue";
+      buildSegment({
+        input: supervisorSource, output: out,
+        label: supLabel,
+        startSec: segStart, durationSec: segDur,
+        chapterLabel: "SUPERVISOR",
+        detailText: supDetail,
+        scaleFilter: e2eScale,
+      });
+      if (fs.existsSync(out)) {
+        segments.push(out);
+        if (chapters.length > 0) chapters[chapters.length - 1].duration += segDur;
       }
     }
 
-    // ── Chapter 8: Call Acceptance & Screen Pop ──
-    if (hasSf && ts && ts.acceptClicked != null) {
+    // ── Chapter 11: Call Acceptance ──
+    if (hasSf && ts && ts.incomingDetected != null && ts.acceptClicked != null) {
       {
         const out = segPath("phase-accept-card");
         buildCard({
@@ -765,24 +792,24 @@ if (suite) {
           bgColor: BRAND.bgSecondary,
           lines: [
             { text: "Call Acceptance", size: 18, color: BRAND.info, y: H / 2 - 50 },
-            { text: "Agent Accepts — VoiceCall Screen Pop", size: 34, color: BRAND.textPrimary, y: H / 2 - 10 },
-            { text: "VoiceCall record created with contact details", size: 16, color: BRAND.muted, y: H / 2 + 35 },
+            { text: "Agent Accepts Incoming Call", size: 34, color: BRAND.textPrimary, y: H / 2 - 10 },
+            { text: "Omni-Channel widget displays the offer", size: 16, color: BRAND.muted, y: H / 2 + 35 },
           ],
         });
         addSegment(out, "Call Acceptance");
       }
 
-      const acceptStart = Math.max(0, ts.acceptClicked - 1);
-      const acceptEnd = ts.testEnd ?? ts.screenPopDetected ? ts.screenPopDetected + 8 : acceptStart + 15;
-      const acceptDur = Math.min(acceptEnd - acceptStart, 20);
+      const acceptStart = Math.max(0, ts.incomingDetected - 2);
+      const acceptEnd = ts.acceptClicked + 3;
+      const acceptDur = Math.min(acceptEnd - acceptStart, 15);
 
-      const out = segPath("accept-screenpop");
+      const out = segPath("omni-accept");
       buildSegment({
         input: sfVideo, output: out,
-        label: "Accept + Screen Pop (1x)",
+        label: "Call acceptance (1x)",
         startSec: acceptStart, durationSec: acceptDur,
-        chapterLabel: "KEY MOMENT",
-        detailText: "Agent accepts call — VoiceCall screen pop appears",
+        chapterLabel: "CALL ACCEPTANCE",
+        detailText: "Omni-Channel offer appears — agent accepts the call",
         scaleFilter: e2eScale,
       });
       if (fs.existsSync(out)) {
@@ -790,11 +817,46 @@ if (suite) {
         if (chapters.length > 0) chapters[chapters.length - 1].duration += acceptDur;
       }
     }
+
+    // ── Chapter 12: VoiceCall Record ──
+    if (hasSf && ts && ts.acceptClicked != null) {
+      {
+        const out = segPath("phase-screenpop-card");
+        buildCard({
+          output: out, duration: 3,
+          bgColor: BRAND.bgSecondary,
+          lines: [
+            { text: "VoiceCall Record", size: 18, color: BRAND.info, y: H / 2 - 50 },
+            { text: "Screen Pop — Record Created from Call", size: 34, color: BRAND.textPrimary, y: H / 2 - 10 },
+            { text: "VoiceCall record with contact and case details", size: 16, color: BRAND.muted, y: H / 2 + 35 },
+          ],
+        });
+        addSegment(out, "VoiceCall Record");
+      }
+
+      const spStart = ts.acceptClicked;
+      const spEnd = ts.screenPopDetected ? ts.screenPopDetected + 8 : spStart + 15;
+      const spDur = Math.min(spEnd - spStart, 20);
+
+      const out = segPath("voicecall-record");
+      buildSegment({
+        input: sfVideo, output: out,
+        label: "VoiceCall screen pop (1x)",
+        startSec: spStart, durationSec: spDur,
+        chapterLabel: "SCREEN POP",
+        detailText: "VoiceCall record appears — screen pop verified",
+        scaleFilter: e2eScale,
+      });
+      if (fs.existsSync(out)) {
+        segments.push(out);
+        if (chapters.length > 0) chapters[chapters.length - 1].duration += spDur;
+      }
+    }
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── Chapter 9: Video Evidence Output ─────────────────────────────────────
+// ── Chapter 13: Video Evidence Output ────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
 
 {
@@ -837,51 +899,59 @@ if (suiteDir) {
   }
 }
 
-// Results summary card
+// Results summary card — show only the target scenario
 if (suite) {
   const out = segPath("results-summary");
-  const passed = suite.scenarios.filter((sc) => sc.status === "passed");
-  const failed = suite.scenarios.filter((sc) => sc.status !== "passed" && sc.status !== "allowed_failure");
+  const target = suite.scenarios.find((sc) => sc.id === targetScenarioId);
+  const isPassed = target?.status === "passed";
 
   const lines = [
-    { text: `${passed.length}/${suite.totals.scenarios} E2E Scenarios Passed`, size: 36,
-      color: failed.length === 0 ? BRAND.success : BRAND.danger, y: 80 },
+    { text: isPassed ? "Test Passed" : "Test Result", size: 42,
+      color: isPassed ? BRAND.success : BRAND.danger, y: 120 },
+    { text: TITLES[targetScenarioId] ?? targetScenarioId, size: 28,
+      color: BRAND.textPrimary, y: 200 },
   ];
 
-  for (let j = 0; j < passed.length; j++) {
-    lines.push({
-      text: `  ${TITLES[passed[j].id] ?? passed[j].id}`,
-      size: 20, color: "0x7ee787", x: "200", y: 160 + j * 36,
-    });
+  if (target) {
+    const assertions = buildAssertions(target);
+    for (let j = 0; j < assertions.length && j < 8; j++) {
+      lines.push({
+        text: assertions[j],
+        size: 18, color: "0x7ee787", x: "300", y: 280 + j * 36,
+      });
+    }
   }
 
   lines.push({
-    text: "Real calls via Amazon Connect — CCP dial + SF agent + supervisor + screen pop",
+    text: "Real call via Amazon Connect — CCP dial + SF agent + supervisor + screen pop",
     size: 16, color: BRAND.textSecondary, y: H - 80,
   });
 
-  buildCard({ output: out, duration: 6, bgColor: BRAND.bgPrimary, lines });
+  buildCard({ output: out, duration: 8, bgColor: BRAND.bgPrimary, lines });
   if (fs.existsSync(out)) {
     segments.push(out);
-    if (chapters.length > 0) chapters[chapters.length - 1].duration += 6;
+    if (chapters.length > 0) chapters[chapters.length - 1].duration += 8;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ── Chapter 10: Outro ────────────────────────────────────────────────────
+// ── Chapter 14: Outro (with logo) ────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
 
 {
   const out = segPath("outro");
-  buildCard({
+  buildCardWithLogo(ffmpegPath, {
     output: out, duration: 8,
     bgColor: BRAND.bgPrimary,
+    w: W, h: H, fps: FPS,
+    logoPath, logoSize: 150, logoY: 200,
+    codecArgs: h264Out(),
     lines: [
-      { text: "Audrique", size: 54, color: BRAND.info, y: H / 2 - 100 },
-      { text: "Open-Source E2E Contact Center Testing", size: 24, color: BRAND.textSecondary, y: H / 2 - 30 },
-      { text: "Salesforce Service Cloud Voice + Amazon Connect", size: 18, color: BRAND.muted, y: H / 2 + 20 },
-      { text: "Like & Subscribe for more demos", size: 22, color: BRAND.success, y: H / 2 + 90 },
-      { text: "github.com/audrique", size: 16, color: BRAND.accent, y: H / 2 + 140 },
+      { text: "Audrique", size: 54, color: BRAND.info, y: 420 },
+      { text: "Open-Source E2E Contact Center Testing", size: 24, color: BRAND.textSecondary, y: 490 },
+      { text: "Salesforce Service Cloud Voice + Amazon Connect", size: 18, color: BRAND.muted, y: 540 },
+      { text: "Like & Subscribe for more demos", size: 22, color: BRAND.success, y: 620 },
+      { text: "github.com/audrique", size: 16, color: BRAND.accent, y: 670 },
     ],
   });
   addSegment(out, "Outro");

@@ -205,6 +205,46 @@ export function buildTitleCard(ffmpegPath, {
   );
 }
 
+// ── Title card with logo overlay ──────────────────────────────────────
+
+export function buildCardWithLogo(ffmpegPath, {
+  output, lines, duration = 5,
+  bgColor = "0x0f1117",
+  w = 1920, h = 1080, fps = 30,
+  logoPath, logoSize = 200, logoY = 160,
+  codecArgs = null,
+}) {
+  if (!logoPath || !fs.existsSync(logoPath)) {
+    return buildTitleCard(ffmpegPath, { output, lines, duration, bgColor, w, h, fps, codecArgs });
+  }
+
+  const textFilters = lines.map((line) =>
+    drawtext(line.text, {
+      size: line.size ?? 24,
+      color: line.color ?? "white",
+      x: line.x ?? "(w-text_w)/2",
+      y: String(line.y),
+    })
+  );
+
+  const filterComplex = [
+    `[1:v]scale=${logoSize}:${logoSize}[logo]`,
+    `[0:v][logo]overlay=(main_w-${logoSize})/2:${logoY}[base]`,
+    `[base]${textFilters.join(",")}`,
+  ].join(";");
+
+  const codec = codecArgs ?? ["-c:v", "libx264", "-crf", "18", "-preset", "slow", "-pix_fmt", "yuv420p"];
+
+  return ffrun(ffmpegPath,
+    ["-y",
+     "-f", "lavfi", "-i", colorSrc(duration, bgColor, w, h, fps),
+     "-i", logoPath,
+     "-filter_complex", filterComplex,
+     ...codec, output],
+    `Title card with logo: ${lines[0]?.text?.slice(0, 40) ?? ""}`,
+  );
+}
+
 // ── Supervisor video finder ───────────────────────────────────────────────
 
 export function findSupervisorVideo(sc) {
@@ -214,6 +254,20 @@ export function findSupervisorVideo(sc) {
   if (!fs.existsSync(attDir)) return null;
   const files = fs.readdirSync(attDir)
     .filter((n) => /^salesforce-supervisor-video-.*\.webm$/i.test(n))
+    .map((n) => path.join(attDir, n))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  return files[0] ?? null;
+}
+
+// ── Supervisor In-Progress Work video finder ─────────────────────────────
+
+export function findSupervisorInProgressVideo(sc) {
+  const artDir = sc.artifacts?.[0]?.dir;
+  if (!artDir) return null;
+  const attDir = path.join(artDir, "attachments");
+  if (!fs.existsSync(attDir)) return null;
+  const files = fs.readdirSync(attDir)
+    .filter((n) => /^salesforce-supervisor-in-progress-video-.*\.webm$/i.test(n))
     .map((n) => path.join(attDir, n))
     .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
   return files[0] ?? null;

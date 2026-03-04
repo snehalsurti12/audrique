@@ -9,7 +9,13 @@
 
 > The first open-source tool that tests across telephony, CRM UI, and backend records simultaneously — no mocks, no stubs, real calls.
 
-https://www.youtube.com/watch?v=yukCm70mJ9s&t=5s
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=yukCm70mJ9s">
+    <img src="https://img.youtube.com/vi/yukCm70mJ9s/maxresdefault.jpg" alt="Audrique — Automated Voice Testing for Contact Centers" width="720" />
+  </a>
+  <p><em>Click to watch: Automated Voice Testing for Contact Centers (4:37)</em></p>
+</div>
+
 ---
 
 ## What's New in v0.4.0

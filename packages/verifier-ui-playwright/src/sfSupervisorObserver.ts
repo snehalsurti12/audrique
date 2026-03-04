@@ -37,6 +37,7 @@ export type SupervisorQueueObserverSession = {
   baselineInProgressSignature: string;
   observation: Promise<SupervisorQueueObservation>;
   videoPath?: string;
+  inProgressVideoPath?: string;
   end: () => Promise<void>;
 };
 
@@ -168,11 +169,23 @@ export async function startSupervisorQueueObserver(args: {
     observation,
     videoPath: undefined,
     end: async () => {
+      // Capture In-Progress Work page video before closing.
+      if (inProgressPage) {
+        const ipVideo = inProgressPage.video();
+        await inProgressPage.close().catch(() => undefined);
+        if (ipVideo) {
+          const ipPath = await ipVideo.path().catch(() => undefined);
+          if (ipPath) {
+            await new Promise((r) => setTimeout(r, 500));
+            if (fs.existsSync(ipPath) && fs.statSync(ipPath).size > 0) {
+              session.inProgressVideoPath = ipPath;
+            }
+          }
+        }
+      }
+      // Capture Queue Backlog page video.
       const video = page.video();
       // Close supervisor pages, not the shared context (agent still needs it).
-      if (inProgressPage) {
-        await inProgressPage.close().catch(() => undefined);
-      }
       await page.close();
       if (video) {
         const vPath = await video.path().catch(() => undefined);
@@ -686,7 +699,11 @@ export async function waitForSupervisorQueueWaiting(
     (process.env.SUPERVISOR_SKIP_QUEUE_BACKLOG ?? "false").trim()
   );
 
-  // Two-tab mode: dedicated pages for each surface, poll in parallel
+  // Two-tab mode: dedicated pages for each surface, poll in parallel.
+  // Queue backlog polls for "Total Waiting" increase; In-Progress Work polls
+  // for in-progress count/signature changes.  In fast-routing scenarios the
+  // queue waiting count may only be >0 for a sub-second window that the 1.2s
+  // poll misses, so in-progress serves as a reliable fallback.
   if (args.inProgressPage && (allowInProgressFallback || skipQueueBacklog)) {
     const polls: Promise<SupervisorQueueObservation>[] = [];
 
@@ -712,8 +729,16 @@ export async function waitForSupervisorQueueWaiting(
       })
     );
 
-    // Race: first surface to detect activity wins
-    return Promise.race(polls);
+    // Any: first surface to detect activity wins.  Promise.any (not .race)
+    // ensures a single page crash doesn't kill the whole observation — the
+    // surviving poll can still succeed.  Only rejects if ALL polls fail.
+    return Promise.any(polls).catch((aggErr: unknown) => {
+      // Promise.any rejects with AggregateError when ALL polls fail.
+      // Surface the most informative underlying error.
+      const errors = aggErr instanceof AggregateError ? aggErr.errors : [aggErr];
+      const reasons = errors.map((e: unknown) => (e instanceof Error ? e.message : String(e)));
+      throw new Error(`All supervisor polls failed: ${reasons.join(" | ")}`);
+    });
   }
 
   // Single-page fallback (original behavior when no inProgressPage provided)

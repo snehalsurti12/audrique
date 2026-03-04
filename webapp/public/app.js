@@ -3095,26 +3095,40 @@ function endRun(status) {
   const statuses = Object.values(runState.scenarioStatuses);
   const passed = statuses.filter((s) => s === "passed").length;
   const failed = statuses.filter((s) => s === "failed").length;
-  const skipped = statuses.filter((s) => s === "skipped" || s === "pending").length;
+  const skipped = statuses.filter((s) => s === "skipped").length;
+  const pending = statuses.filter((s) => s === "pending").length;
   const total = statuses.length;
+  const executed = passed + failed;  // scenarios that actually ran
+  const noneExecuted = executed === 0 && status !== "passed";
 
   const summaryEl = document.getElementById("run-summary");
   summaryEl.classList.remove("hidden");
-  document.getElementById("run-summary-stats").innerHTML = `
-    <span class="run-stat-total">${total} scenarios</span>
-    <span class="run-stat-pass">${passed} passed</span>
-    <span class="run-stat-fail">${failed} failed</span>
-    ${skipped > 0 ? `<span class="run-stat-skip">${skipped} skipped</span>` : ""}
-  `;
+
+  if (noneExecuted) {
+    document.getElementById("run-summary-stats").innerHTML = `
+      <span class="run-stat-fail">No scenarios executed</span>
+      <span class="run-stat-skip">${total} scenario${total !== 1 ? "s" : ""} in suite</span>
+    `;
+  } else {
+    document.getElementById("run-summary-stats").innerHTML = `
+      <span class="run-stat-total">${executed}/${total} executed</span>
+      <span class="run-stat-pass">${passed} passed</span>
+      ${failed > 0 ? `<span class="run-stat-fail">${failed} failed</span>` : ""}
+      ${skipped > 0 ? `<span class="run-stat-skip">${skipped} skipped</span>` : ""}
+    `;
+  }
 
   // Final line in terminal
   const elapsed = runState.startTime ? formatRunTime(Date.now() - runState.startTime) : "0s";
-  appendRunLine(
-    "done-status",
-    status === "passed"
-      ? `Suite passed (${passed}/${total} scenarios) in ${elapsed}`
-      : `Suite finished with failures (${passed} passed, ${failed} failed) in ${elapsed}`
-  );
+  let doneMsg;
+  if (noneExecuted) {
+    doneMsg = `Suite aborted — no scenarios executed. Check session validation above. (${elapsed})`;
+  } else if (status === "passed") {
+    doneMsg = `Suite passed (${passed}/${total} scenarios) in ${elapsed}`;
+  } else {
+    doneMsg = `Suite finished with failures (${passed} passed, ${failed} failed) in ${elapsed}`;
+  }
+  appendRunLine("done-status", doneMsg);
 }
 
 function updateRunTimer() {

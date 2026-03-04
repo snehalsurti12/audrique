@@ -740,6 +740,12 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
             contentType: "video/webm"
           });
         }
+        if (supervisorSession.inProgressVideoPath && fs.existsSync(supervisorSession.inProgressVideoPath)) {
+          await test.info().attach("salesforce-supervisor-in-progress-video", {
+            path: supervisorSession.inProgressVideoPath,
+            contentType: "video/webm"
+          });
+        }
         const observerSummaryPath = test.info().outputPath("supervisor-observation.json");
         const observerSummary: Record<string, unknown> = {
           queueName: supervisorSession.queueName,
