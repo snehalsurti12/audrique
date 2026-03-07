@@ -24,6 +24,31 @@ const args = process.argv.slice(2);
 const portFlag = args.indexOf("--port");
 const PORT = portFlag >= 0 ? parseInt(args[portFlag + 1], 10) : 4200;
 
+// ── Bundled OAuth Connected App ──────────────────────────────────────────────
+// Resolved at startup from env vars or Vault. Never stored on disk.
+let BUNDLED_OAUTH_CONSUMER_KEY = process.env.AUDRIQUE_OAUTH_CONSUMER_KEY || "";
+let BUNDLED_OAUTH_CONSUMER_SECRET = process.env.AUDRIQUE_OAUTH_CONSUMER_SECRET || "";
+
+async function resolveOAuthKeysFromVault() {
+  if (BUNDLED_OAUTH_CONSUMER_KEY && BUNDLED_OAUTH_CONSUMER_SECRET) return;
+  const addr = (process.env.VAULT_ADDR || "").trim();
+  const token = (process.env.VAULT_TOKEN || "").trim();
+  if (!addr || !token) return;
+  try {
+    const resp = await fetch(`${addr.replace(/\/+$/, "")}/v1/secret/data/voice/audrique/oauth`, {
+      headers: { "X-Vault-Token": token },
+    });
+    if (!resp.ok) return;
+    const payload = await resp.json();
+    const data = payload?.data?.data ?? payload?.data ?? {};
+    if (data.consumer_key) BUNDLED_OAUTH_CONSUMER_KEY = data.consumer_key;
+    if (data.consumer_secret) BUNDLED_OAUTH_CONSUMER_SECRET = data.consumer_secret;
+    console.log("[server] OAuth keys resolved from Vault.");
+  } catch {
+    // Vault not available — keys stay empty until configured
+  }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function readJsonFile(filePath) {
@@ -161,7 +186,8 @@ const MIME = {
 const SENSITIVE_PATTERNS = [/PASSWORD/i, /TOKEN/i, /SECRET/i, /API_KEY/i, /PRIVATE_KEY/i, /AUTH_TOKEN/i];
 const SENSITIVE_KEYS = new Set([
   "SF_PASSWORD", "SF_EMAIL_CODE", "AWS_PASSWORD",
-  "TWILIO_AUTH_TOKEN", "VAULT_TOKEN",
+  "TWILIO_AUTH_TOKEN", "VAULT_TOKEN", "SF_OAUTH_CONSUMER_SECRET",
+  "GEMINI_API_KEY",
 ]);
 
 const NON_SENSITIVE_KEYS = new Set(["SECRETS_BACKEND", "REGULATED_MODE"]);
@@ -215,6 +241,158 @@ function setVaultToken(profileId, token) {
   writeVaultAuth(auth);
 }
 
+// ── Vault Secret Groups (matches vault-seed.sh conventions) ────────────────
+const VAULT_SECRET_GROUPS = {
+  salesforce: {
+    subpath: "salesforce",
+    fields: {
+      sfUsername: "username",
+      sfPassword: "password",
+      oauthConsumerKey: "consumer_key",
+      oauthConsumerSecret: "consumer_secret",
+    },
+  },
+  aws: {
+    subpath: "aws",
+    fields: {
+      awsUsername: "username",
+      awsPassword: "password",
+      awsAccountId: "account_id",
+      awsAccessKeyId: "access_key_id",
+      awsSecretAccessKey: "secret_access_key",
+      connectInstanceId: "connect_instance_id",
+    },
+  },
+  twilio: {
+    subpath: "twilio",
+    fields: {
+      twilioSid: "account_sid",
+      twilioToken: "auth_token",
+    },
+  },
+  gemini: {
+    subpath: "gemini",
+    fields: {
+      geminiApiKey: "api_key",
+    },
+  },
+};
+
+/**
+ * Build _REF values from a Vault base path using grouped subpaths.
+ * e.g. basePath="secret/data/voice/personal"
+ *   → { oauthConsumerKeyRef: "secret/data/voice/personal/salesforce#consumer_key", ... }
+ */
+function buildVaultRefsFromBasePath(basePath) {
+  const refs = {};
+  const base = basePath.replace(/\/+$/, "");
+  for (const group of Object.values(VAULT_SECRET_GROUPS)) {
+    for (const [credKey, vaultField] of Object.entries(group.fields)) {
+      refs[credKey + "Ref"] = `${base}/${group.subpath}#${vaultField}`;
+    }
+  }
+  return refs;
+}
+
+/**
+ * Write secrets to Vault KV v2 engine in grouped subpaths.
+ * Reads existing values first to merge (won't overwrite untouched fields).
+ */
+async function writeSecretsToVault(vaultAddr, vaultToken, basePath, credentials) {
+  const written = [];
+  const errors = [];
+  const addr = vaultAddr.replace(/\/+$/, "");
+  const base = basePath.replace(/\/+$/, "");
+
+  for (const group of Object.values(VAULT_SECRET_GROUPS)) {
+    // Collect non-empty, non-masked values for this group
+    const data = {};
+    for (const [credKey, vaultField] of Object.entries(group.fields)) {
+      const value = credentials[credKey];
+      if (value && !value.startsWith("\u2022")) {
+        data[vaultField] = value;
+      }
+    }
+
+    if (Object.keys(data).length === 0) continue;
+
+    const secretPath = `${base}/${group.subpath}`.replace(/^\/+/, "");
+    const url = `${addr}/v1/${secretPath}`;
+
+    try {
+      // Read existing secrets to merge
+      let existingData = {};
+      try {
+        const readResp = await fetch(url, {
+          method: "GET",
+          headers: { "X-Vault-Token": vaultToken },
+          signal: AbortSignal.timeout(10000),
+        });
+        if (readResp.ok) {
+          const payload = await readResp.json();
+          existingData = payload?.data?.data ?? payload?.data ?? {};
+        }
+      } catch {
+        // Path doesn't exist yet — fine
+      }
+
+      const merged = { ...existingData, ...data };
+
+      const writeResp = await fetch(url, {
+        method: "PUT",
+        headers: { "X-Vault-Token": vaultToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ data: merged }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!writeResp.ok) {
+        const text = await writeResp.text().catch(() => "");
+        errors.push(`${group.subpath}: HTTP ${writeResp.status} - ${text.slice(0, 200)}`);
+      } else {
+        written.push(group.subpath);
+      }
+    } catch (err) {
+      errors.push(`${group.subpath}: ${err.message}`);
+    }
+  }
+
+  return { success: errors.length === 0, written, errors };
+}
+
+/**
+ * Read secrets from Vault for a profile's base path. Returns masked values.
+ */
+async function readSecretsFromVault(vaultAddr, vaultToken, basePath) {
+  const secrets = {};
+  const addr = vaultAddr.replace(/\/+$/, "");
+  const base = basePath.replace(/\/+$/, "");
+
+  for (const group of Object.values(VAULT_SECRET_GROUPS)) {
+    const secretPath = `${base}/${group.subpath}`.replace(/^\/+/, "");
+    const url = `${addr}/v1/${secretPath}`;
+    try {
+      const resp = await fetch(url, {
+        method: "GET",
+        headers: { "X-Vault-Token": vaultToken },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (resp.ok) {
+        const payload = await resp.json();
+        const data = payload?.data?.data ?? payload?.data ?? {};
+        for (const [credKey, vaultField] of Object.entries(group.fields)) {
+          if (data[vaultField]) {
+            secrets[credKey] = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
+          }
+        }
+      }
+    } catch {
+      // Group not found — skip
+    }
+  }
+
+  return secrets;
+}
+
 function maskSensitiveValues(envMap) {
   const masked = { ...envMap };
   for (const key of Object.keys(masked)) {
@@ -243,15 +421,28 @@ function generateEnvContent(profile, creds) {
     // (plaintext token in .env triggers REGULATED_MODE violation)
   }
 
+  const sfAuthMethod = creds?.sfAuthMethod || "password";
   lines.push(
     ``,
     `# Salesforce`,
     `SF_LOGIN_URL=${profile.salesforce?.loginUrl || "https://login.salesforce.com"}`,
+    `SF_AUTH_METHOD=${sfAuthMethod}`,
   );
 
-  if (isVault) {
-    lines.push(`SF_USERNAME_REF=${creds.sfUsernameRef || ""}`);
-    lines.push(`SF_PASSWORD_REF=${creds.sfPasswordRef || ""}`);
+  if (sfAuthMethod === "oauth") {
+    if (isVault) {
+      lines.push(`SF_OAUTH_CONSUMER_KEY=`);
+      lines.push(`SF_OAUTH_CONSUMER_KEY_REF=${creds?.oauthConsumerKeyRef || ""}`);
+      lines.push(`SF_OAUTH_CONSUMER_SECRET=`);
+      lines.push(`SF_OAUTH_CONSUMER_SECRET_REF=${creds?.oauthConsumerSecretRef || ""}`);
+    } else {
+      lines.push(`SF_OAUTH_CONSUMER_KEY=${creds?.sfOauthConsumerKey || ""}`);
+      lines.push(`SF_OAUTH_CONSUMER_SECRET=${creds?.sfOauthConsumerSecret || ""}`);
+    }
+    lines.push(`SF_OAUTH_CALLBACK_URL=${creds?.sfOauthCallbackUrl || "http://localhost:4200/oauth/callback"}`);
+  } else if (isVault) {
+    lines.push(`SF_USERNAME_REF=${creds?.sfUsernameRef || ""}`);
+    lines.push(`SF_PASSWORD_REF=${creds?.sfPasswordRef || ""}`);
   } else {
     lines.push(`SF_USERNAME=${creds?.sfUsername || ""}`);
     lines.push(`SF_PASSWORD=${creds?.sfPassword || ""}`);
@@ -259,7 +450,7 @@ function generateEnvContent(profile, creds) {
 
   lines.push(
     `SF_APP_NAME=${profile.salesforce?.appName || "Service Console"}`,
-    `SF_INSTANCE_URL=`,
+    `SF_INSTANCE_URL=${creds?.sfInstanceUrl || ""}`,
     `SF_STORAGE_STATE=.auth/sf-${profile.id}.json`,
     `SF_SKIP_LOGIN=true`,
     ``,
@@ -273,9 +464,19 @@ function generateEnvContent(profile, creds) {
   );
 
   if (isVault) {
-    lines.push(`AWS_USERNAME_REF=${creds.awsUsernameRef || ""}`);
-    lines.push(`AWS_PASSWORD_REF=${creds.awsPasswordRef || ""}`);
-    lines.push(`AWS_ACCOUNT_ID_REF=${creds.awsAccountIdRef || ""}`);
+    lines.push(`AWS_USERNAME=`);
+    lines.push(`AWS_USERNAME_REF=${creds?.awsUsernameRef || ""}`);
+    lines.push(`AWS_PASSWORD=`);
+    lines.push(`AWS_PASSWORD_REF=${creds?.awsPasswordRef || ""}`);
+    lines.push(`AWS_ACCOUNT_ID=`);
+    lines.push(`AWS_ACCOUNT_ID_REF=${creds?.awsAccountIdRef || ""}`);
+    lines.push(`# Connect Federation API (headless auth, no browser sign-in)`);
+    lines.push(`AWS_ACCESS_KEY_ID=`);
+    lines.push(`AWS_ACCESS_KEY_ID_REF=${creds?.awsAccessKeyIdRef || ""}`);
+    lines.push(`AWS_SECRET_ACCESS_KEY=`);
+    lines.push(`AWS_SECRET_ACCESS_KEY_REF=${creds?.awsSecretAccessKeyRef || ""}`);
+    lines.push(`CONNECT_INSTANCE_ID=`);
+    lines.push(`CONNECT_INSTANCE_ID_REF=${creds?.connectInstanceIdRef || ""}`);
   } else {
     lines.push(`AWS_USERNAME=${creds?.awsUsername || ""}`);
     lines.push(`AWS_PASSWORD=${creds?.awsPassword || ""}`);
@@ -291,18 +492,34 @@ function generateEnvContent(profile, creds) {
   );
 
   if (isVault) {
-    lines.push(`TWILIO_ACCOUNT_SID_REF=${creds.twilioSidRef || ""}`);
-    lines.push(`TWILIO_AUTH_TOKEN_REF=${creds.twilioTokenRef || ""}`);
+    lines.push(`TWILIO_ACCOUNT_SID=`);
+    lines.push(`TWILIO_ACCOUNT_SID_REF=${creds?.twilioSidRef || ""}`);
+    lines.push(`TWILIO_AUTH_TOKEN=`);
+    lines.push(`TWILIO_AUTH_TOKEN_REF=${creds?.twilioTokenRef || ""}`);
+    lines.push(`TWILIO_FROM_NUMBER=${creds?.twilioFromNumber || ""}`);
+    lines.push(`TWILIO_FROM_NUMBER_REF=`);
+    lines.push(`CONNECT_ENTRYPOINT_NUMBER=${creds?.connectEntrypoint || ""}`);
+    lines.push(`CONNECT_ENTRYPOINT_NUMBER_REF=`);
   } else {
     lines.push(`TWILIO_ACCOUNT_SID=${creds?.twilioSid || ""}`);
     lines.push(`TWILIO_AUTH_TOKEN=${creds?.twilioToken || ""}`);
+    lines.push(`TWILIO_FROM_NUMBER=${creds?.twilioFromNumber || ""}`);
+    lines.push(`CONNECT_ENTRYPOINT_NUMBER=${creds?.connectEntrypoint || ""}`);
   }
 
-  lines.push(
-    `TWILIO_FROM_NUMBER=${creds?.twilioFromNumber || ""}`,
-    `CONNECT_ENTRYPOINT_NUMBER=${creds?.connectEntrypoint || ""}`,
-    ``,
-  );
+  // AI Providers (NL Caller — optional)
+  const hasGemini = isVault ? creds?.geminiApiKeyRef : creds?.geminiApiKey;
+  if (hasGemini) {
+    lines.push(`# AI Providers (NL Caller)`);
+    if (isVault) {
+      lines.push(`GEMINI_API_KEY=`);
+      lines.push(`GEMINI_API_KEY_REF=${creds?.geminiApiKeyRef || ""}`);
+    } else {
+      lines.push(`GEMINI_API_KEY=${creds?.geminiApiKey || ""}`);
+    }
+  }
+
+  lines.push(``);
 
   return lines.join("\n");
 }
@@ -339,8 +556,15 @@ async function handleApi(req, res) {
         p._authStatus = "missing";
       } else {
         const backend = (envMap.SECRETS_BACKEND || "env").toLowerCase();
+        const sfAuthMethod = (envMap.SF_AUTH_METHOD || "password").toLowerCase();
         p._authBackend = backend;
-        if (backend === "vault") {
+        p._sfAuthMethod = sfAuthMethod;
+        if (sfAuthMethod === "oauth") {
+          const hasConsumerKey = !!(envMap.SF_OAUTH_CONSUMER_KEY || envMap.SF_OAUTH_CONSUMER_KEY_REF);
+          const oauthTokenFile = path.resolve(PROJECT_ROOT, `.auth/sf-oauth-${p.id}.json`);
+          const hasOAuthTokens = fs.existsSync(oauthTokenFile);
+          p._authStatus = hasConsumerKey ? (hasOAuthTokens ? "oauth-connected" : "oauth-configured") : "incomplete";
+        } else if (backend === "vault") {
           const hasVault = (p.vault?.addr || envMap.VAULT_ADDR) && (getVaultToken(p.id) || envMap.VAULT_TOKEN);
           p._authStatus = (hasVault && envMap.SF_PASSWORD_REF) ? "configured" : "incomplete";
         } else {
@@ -821,6 +1045,7 @@ async function handleApi(req, res) {
       },
       vault: {
         addr: vault?.addr || "",
+        basePath: vault?.basePath || "",
       },
       discovery: { autoDiscover: true, cacheFile: `.cache/org-vocabulary-${id}.json`, cacheTtlMinutes: 60 },
       vocabulary: {
@@ -880,6 +1105,7 @@ async function handleApi(req, res) {
     if (vault && typeof vault === "object") {
       if (!profile.vault) profile.vault = {};
       if (vault.addr !== undefined) profile.vault.addr = vault.addr;
+      if (vault.basePath !== undefined) profile.vault.basePath = vault.basePath;
       // Vault token stored in gitignored file, not profiles.json
       if (vault.token !== undefined) setVaultToken(id, vault.token);
     }
@@ -958,8 +1184,11 @@ async function handleApi(req, res) {
     // Mask the vault token for display
     if (masked.VAULT_TOKEN) masked.VAULT_TOKEN = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
     // Check if credentials are configured (non-empty sensitive fields)
+    const sfAuthMethod = (envMap.SF_AUTH_METHOD || "password").toLowerCase();
     let configured = false;
-    if (backend === "vault") {
+    if (sfAuthMethod === "oauth") {
+      configured = !!(envMap.SF_OAUTH_CONSUMER_KEY || envMap.SF_OAUTH_CONSUMER_KEY_REF);
+    } else if (backend === "vault") {
       configured = !!(envMap.VAULT_ADDR && envMap.SF_PASSWORD_REF);
     } else {
       configured = !!(envMap.SF_USERNAME && envMap.SF_PASSWORD);
@@ -968,7 +1197,7 @@ async function handleApi(req, res) {
     return true;
   }
 
-  // POST /api/profile/env — write credentials to .env file
+  // POST /api/profile/env — write credentials to .env file (and optionally to Vault)
   if (pathname === "/api/profile/env" && req.method === "POST") {
     const body = await parseBody(req);
     const { id, credentials } = body;
@@ -982,11 +1211,67 @@ async function handleApi(req, res) {
       sendJson(res, 404, { error: `Profile not found: ${id}` });
       return true;
     }
+
+    const isVault = (credentials?.secretsBackend || "env") === "vault";
+    const basePath = profile.vault?.basePath || "";
+
+    // If Vault mode with basePath and actual values → write to Vault first
+    let vaultWriteResult = null;
+    if (isVault && basePath && credentials?._writeToVault) {
+      const vaultAddr = profile.vault?.addr || credentials?.vaultAddr || "";
+      const vaultToken = getVaultToken(id);
+      if (!vaultAddr || !vaultToken) {
+        sendJson(res, 400, { error: "Vault address and token required for Vault write" });
+        return true;
+      }
+      vaultWriteResult = await writeSecretsToVault(vaultAddr, vaultToken, basePath, credentials);
+      if (!vaultWriteResult.success) {
+        sendJson(res, 500, {
+          error: "Failed to write secrets to Vault",
+          details: vaultWriteResult.errors,
+          written: vaultWriteResult.written,
+        });
+        return true;
+      }
+      // Auto-generate refs from basePath so .env only has paths, never plaintext
+      const autoRefs = buildVaultRefsFromBasePath(basePath);
+      Object.assign(credentials, autoRefs);
+      delete credentials._writeToVault;
+    }
+
     const envContent = generateEnvContent(profile, credentials || {});
     const envResolved = path.resolve(PROJECT_ROOT, profile.envFile);
     fs.mkdirSync(path.dirname(envResolved), { recursive: true });
     fs.writeFileSync(envResolved, envContent);
-    sendJson(res, 200, { message: "Credentials saved", envFile: profile.envFile });
+
+    const result = { message: "Credentials saved", envFile: profile.envFile };
+    if (vaultWriteResult) result.vaultWritten = vaultWriteResult.written;
+    sendJson(res, 200, result);
+    return true;
+  }
+
+  // GET /api/vault/secrets?id=<profileId> — read masked secret presence from Vault
+  if (pathname === "/api/vault/secrets" && req.method === "GET") {
+    const profileId = url.searchParams.get("id");
+    if (!profileId) {
+      sendJson(res, 400, { error: "Missing ?id= parameter" });
+      return true;
+    }
+    const profilesData = readJsonFile("instances/profiles.json");
+    const profile = profilesData?.profiles?.find((p) => p.id === profileId);
+    if (!profile) {
+      sendJson(res, 404, { error: `Profile not found: ${profileId}` });
+      return true;
+    }
+    const basePath = profile.vault?.basePath;
+    const vaultAddr = profile.vault?.addr;
+    const vaultToken = getVaultToken(profileId);
+    if (!basePath || !vaultAddr || !vaultToken) {
+      sendJson(res, 200, { secrets: {}, available: false });
+      return true;
+    }
+    const secrets = await readSecretsFromVault(vaultAddr, vaultToken, basePath);
+    sendJson(res, 200, { secrets, available: true });
     return true;
   }
 
@@ -1056,6 +1341,182 @@ async function handleApi(req, res) {
     return true;
   }
 
+  // ── Salesforce OAuth ──────────────────────────────────────────────────
+  // PKCE verifiers stored in memory (keyed by profileId, short-lived)
+  if (!global._pkceStore) global._pkceStore = new Map();
+
+  // GET /api/oauth/sf/config — returns bundled OAuth config (public info only)
+  if (pathname === "/api/oauth/sf/config" && req.method === "GET") {
+    sendJson(res, 200, {
+      hasBundledApp: !!BUNDLED_OAUTH_CONSUMER_KEY,
+      bundledConsumerKey: BUNDLED_OAUTH_CONSUMER_KEY || null,
+      callbackUrl: `http://localhost:${PORT}/oauth/callback`,
+    });
+    return true;
+  }
+
+  // GET /api/oauth/sf/start — initiate OAuth flow, returns authorize URL
+  if (pathname === "/api/oauth/sf/start" && req.method === "GET") {
+    const profileId = url.searchParams.get("profileId");
+    if (!profileId) {
+      sendJson(res, 400, { error: "Missing ?profileId= parameter" });
+      return true;
+    }
+    const profilesData = readJsonFile("instances/profiles.json");
+    const profile = profilesData?.profiles?.find((p) => p.id === profileId);
+    if (!profile) {
+      sendJson(res, 404, { error: `Profile not found: ${profileId}` });
+      return true;
+    }
+    const envMap = parseEnvFile(profile.envFile) || {};
+    const consumerKey = envMap.SF_OAUTH_CONSUMER_KEY || envMap.SF_OAUTH_CONSUMER_KEY_REF || BUNDLED_OAUTH_CONSUMER_KEY || "";
+    if (!consumerKey) {
+      sendJson(res, 400, { error: "No OAuth Consumer Key available. Configure a Connected App or set AUDRIQUE_OAUTH_CONSUMER_KEY." });
+      return true;
+    }
+    const loginUrl = envMap.SF_LOGIN_URL || profile.salesforce?.loginUrl || "https://login.salesforce.com";
+    const callbackUrl = envMap.SF_OAUTH_CALLBACK_URL || `http://localhost:${PORT}/oauth/callback`;
+    const { buildAuthorizeUrl, generatePkce } = await import(path.join(PROJECT_ROOT, "scripts/sf-oauth-auth.mjs"));
+    const pkce = generatePkce();
+    global._pkceStore.set(profileId, pkce.codeVerifier);
+    // Auto-expire after 10 minutes
+    setTimeout(() => global._pkceStore.delete(profileId), 10 * 60 * 1000);
+    const authorizeUrl = buildAuthorizeUrl({
+      consumerKey,
+      callbackUrl,
+      loginUrl,
+      state: profileId,
+      codeChallenge: pkce.codeChallenge,
+    });
+    sendJson(res, 200, { url: authorizeUrl });
+    return true;
+  }
+
+  // POST /api/oauth/sf/callback — exchange code for tokens and create session
+  if (pathname === "/api/oauth/sf/callback" && req.method === "POST") {
+    const body = await parseBody(req);
+    const { code, profileId } = body;
+    if (!code || !profileId) {
+      sendJson(res, 400, { error: "Missing code or profileId" });
+      return true;
+    }
+    const profilesData = readJsonFile("instances/profiles.json");
+    const profile = profilesData?.profiles?.find((p) => p.id === profileId);
+    if (!profile) {
+      sendJson(res, 404, { error: `Profile not found: ${profileId}` });
+      return true;
+    }
+    const envMap = parseEnvFile(profile.envFile) || {};
+    const consumerKey = envMap.SF_OAUTH_CONSUMER_KEY || envMap.SF_OAUTH_CONSUMER_KEY_REF || BUNDLED_OAUTH_CONSUMER_KEY || "";
+    const consumerSecret = envMap.SF_OAUTH_CONSUMER_SECRET || envMap.SF_OAUTH_CONSUMER_SECRET_REF || BUNDLED_OAUTH_CONSUMER_SECRET || "";
+    if (!consumerKey) {
+      sendJson(res, 400, { error: "No OAuth Consumer Key available. Configure a Connected App or set AUDRIQUE_OAUTH_CONSUMER_KEY." });
+      return true;
+    }
+    const loginUrl = envMap.SF_LOGIN_URL || profile.salesforce?.loginUrl || "https://login.salesforce.com";
+    const callbackUrl = envMap.SF_OAUTH_CALLBACK_URL || `http://localhost:${PORT}/oauth/callback`;
+    const storageStatePath = envMap.SF_STORAGE_STATE || `.auth/sf-${profileId}.json`;
+    const appName = envMap.SF_APP_NAME || profile.salesforce?.appName || "Service Console";
+
+    try {
+      const oauth = await import(path.join(PROJECT_ROOT, "scripts/sf-oauth-auth.mjs"));
+
+      // Step 1: Exchange code for tokens (with PKCE verifier — no secret needed for public clients)
+      const codeVerifier = global._pkceStore?.get(profileId) || undefined;
+      global._pkceStore?.delete(profileId);
+      console.log(`[oauth] Exchanging code for tokens (profile: ${profileId})...`);
+      const tokens = await oauth.exchangeCodeForTokens({
+        code, consumerKey, consumerSecret: consumerSecret || undefined, callbackUrl, loginUrl, codeVerifier,
+      });
+      console.log(`[oauth] Tokens received. Instance: ${tokens.instance_url}`);
+
+      // Step 2: Save tokens
+      oauth.saveOAuthTokens(profileId, tokens);
+
+      // Step 3: Create browser session via frontdoor.jsp
+      console.log(`[oauth] Creating browser session via frontdoor.jsp...`);
+      const session = await oauth.createSessionViaFrontdoor({
+        accessToken: tokens.access_token,
+        instanceUrl: tokens.instance_url,
+        storageStatePath,
+        appName,
+      });
+
+      if (!session.authenticated) {
+        sendJson(res, 200, { success: false, error: "frontdoor.jsp session creation failed. The Connected App may need additional permissions." });
+        return true;
+      }
+
+      console.log(`[oauth] Session created successfully. URL: ${session.finalUrl}`);
+      sendJson(res, 200, { success: true, instanceUrl: tokens.instance_url });
+    } catch (err) {
+      console.error(`[oauth] Error: ${err.message}`);
+      sendJson(res, 200, { success: false, error: err.message });
+    }
+    return true;
+  }
+
+  // POST /api/oauth/sf/refresh — refresh OAuth tokens and recreate session
+  if (pathname === "/api/oauth/sf/refresh" && req.method === "POST") {
+    const body = await parseBody(req);
+    const profileId = body.profileId || "personal";
+    const profilesData = readJsonFile("instances/profiles.json");
+    const profile = profilesData?.profiles?.find((p) => p.id === profileId);
+    if (!profile) {
+      sendJson(res, 404, { error: `Profile not found: ${profileId}` });
+      return true;
+    }
+    const envMap = parseEnvFile(profile.envFile) || {};
+    const storageStatePath = envMap.SF_STORAGE_STATE || `.auth/sf-${profileId}.json`;
+
+    try {
+      const oauth = await import(path.join(PROJECT_ROOT, "scripts/sf-oauth-auth.mjs"));
+      const result = await oauth.tryOAuthRefreshAuth({
+        consumerKey: envMap.SF_OAUTH_CONSUMER_KEY || envMap.SF_OAUTH_CONSUMER_KEY_REF || BUNDLED_OAUTH_CONSUMER_KEY || "",
+        consumerSecret: envMap.SF_OAUTH_CONSUMER_SECRET || envMap.SF_OAUTH_CONSUMER_SECRET_REF || BUNDLED_OAUTH_CONSUMER_SECRET || "",
+        loginUrl: envMap.SF_LOGIN_URL || profile.salesforce?.loginUrl || "https://login.salesforce.com",
+        storageStatePath,
+        appName: envMap.SF_APP_NAME || profile.salesforce?.appName || "Service Console",
+        profileId,
+      });
+
+      if (result.success) {
+        sendJson(res, 200, { success: true });
+      } else {
+        sendJson(res, 200, { success: false, error: result.error });
+      }
+    } catch (err) {
+      sendJson(res, 200, { success: false, error: err.message });
+    }
+    return true;
+  }
+
+  // GET /api/oauth/sf/status — check if OAuth tokens exist for a profile
+  if (pathname === "/api/oauth/sf/status" && req.method === "GET") {
+    const profileId = url.searchParams.get("profileId");
+    if (!profileId) {
+      sendJson(res, 400, { error: "Missing ?profileId= parameter" });
+      return true;
+    }
+    try {
+      const oauth = await import(path.join(PROJECT_ROOT, "scripts/sf-oauth-auth.mjs"));
+      const tokens = oauth.loadOAuthTokens(profileId);
+      if (!tokens) {
+        sendJson(res, 200, { hasTokens: false });
+        return true;
+      }
+      sendJson(res, 200, {
+        hasTokens: true,
+        expired: oauth.isTokenExpired(tokens),
+        instanceUrl: tokens.instance_url || null,
+        issuedAt: tokens.issued_at || null,
+      });
+    } catch (err) {
+      sendJson(res, 200, { hasTokens: false, error: err.message });
+    }
+    return true;
+  }
+
   // ── Auth refresh ────────────────────────────────────────────────────────
 
   // POST /api/auth/refresh — refresh Salesforce session, returns when done
@@ -1121,54 +1582,58 @@ async function handleApi(req, res) {
       return true;
     }
 
-    // Auto-refresh expired sessions before running (same as --refresh-auth)
-    const refreshAuth = body.refreshAuth !== false; // default: true
-    if (refreshAuth && !dryRun) {
-      // Inject Vault config from profile settings
-      const runProfileId = instance || "personal";
-      const runProfilesData = readJsonFile("instances/profiles.json");
-      const runProfile = runProfilesData?.profiles?.find((p) => p.id === runProfileId);
-      const runProfileEnv = runProfile?.envFile ? parseEnvFile(runProfile.envFile) : {};
-      const refreshEnv = { ...process.env };
-      if (instance) refreshEnv.INSTANCE = instance;
-      refreshEnv.VAULT_ADDR = runProfile?.vault?.addr || runProfileEnv?.VAULT_ADDR || refreshEnv.VAULT_ADDR || "";
-      refreshEnv.VAULT_TOKEN = getVaultToken(runProfileId) || runProfileEnv?.VAULT_TOKEN || refreshEnv.VAULT_TOKEN || "";
-      const refreshCode = await new Promise((resolve) => {
-        const rc = spawn(
-          "node",
-          [path.join(PROJECT_ROOT, "scripts/run-instance.mjs"), "refresh-auth", "--", "--sf-only"],
-          { cwd: PROJECT_ROOT, env: refreshEnv, stdio: ["ignore", "pipe", "pipe"] }
-        );
-        rc.on("close", (code) => resolve(code));
-        rc.on("error", () => resolve(1));
-      });
-      if (refreshCode !== 0) {
-        console.warn(`[run] Auth refresh exited with code ${refreshCode}, proceeding anyway.`);
-      }
-    }
-
     const runId = `run-${Date.now()}`;
-    const env = {
-      ...process.env,
-      E2E_SUITE_FILE: suiteFile,
-      FORCE_COLOR: "0",
-    };
-    if (dryRun) env.E2E_SUITE_DRY_RUN = "true";
-    if (instance) env.INSTANCE = instance;
 
-    // Inject Vault config from profiles.json so run-instance.mjs can resolve secrets
+    // Detect if we're already inside Docker
+    const insideDocker = fs.existsSync("/.dockerenv") ||
+      (fs.existsSync("/proc/1/cgroup") &&
+       fs.readFileSync("/proc/1/cgroup", "utf8").includes("docker"));
+
+    // Inject Vault config from profiles.json
     const execProfileId = instance || "personal";
     const execProfilesData = readJsonFile("instances/profiles.json");
     const execProfile = execProfilesData?.profiles?.find((p) => p.id === execProfileId);
-    if (execProfile?.vault?.addr) env.VAULT_ADDR = execProfile.vault.addr;
     const execVaultToken = getVaultToken(execProfileId);
-    if (execVaultToken) env.VAULT_TOKEN = execVaultToken;
 
-    const child = spawn("node", [path.join(PROJECT_ROOT, "scripts/run-instance-e2e-suite.mjs")], {
-      cwd: PROJECT_ROOT,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let child;
+    if (insideDocker) {
+      // Inside Docker: spawn suite runner directly (same container)
+      const env = {
+        ...process.env,
+        E2E_SUITE_FILE: suiteFile,
+        FORCE_COLOR: "0",
+      };
+      if (dryRun) env.E2E_SUITE_DRY_RUN = "true";
+      if (instance) env.INSTANCE = instance;
+      if (execProfile?.vault?.addr) env.VAULT_ADDR = execProfile.vault.addr;
+      if (execVaultToken) env.VAULT_TOKEN = execVaultToken;
+
+      child = spawn("node", [path.join(PROJECT_ROOT, "scripts/run-instance-e2e-suite.mjs")], {
+        cwd: PROJECT_ROOT,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } else {
+      // Local dev: route through Docker for headless Chromium + Vault access
+      const dockerArgs = ["compose", "run", "--rm"];
+      dockerArgs.push("-e", `E2E_SUITE_FILE=${suiteFile}`);
+      if (dryRun) dockerArgs.push("-e", "E2E_SUITE_DRY_RUN=true");
+      if (instance) dockerArgs.push("-e", `INSTANCE=${instance}`);
+      if (execProfile?.vault?.addr) {
+        const vaultAddr = execProfile.vault.addr
+          .replace("localhost", "host.docker.internal")
+          .replace("127.0.0.1", "host.docker.internal");
+        dockerArgs.push("-e", `VAULT_ADDR=${vaultAddr}`);
+      }
+      if (execVaultToken) dockerArgs.push("-e", `VAULT_TOKEN=${execVaultToken}`);
+      dockerArgs.push("test");
+
+      child = spawn("docker", dockerArgs, {
+        cwd: PROJECT_ROOT,
+        env: { ...process.env, FORCE_COLOR: "0" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    }
 
     activeRun = {
       id: runId,
@@ -1308,6 +1773,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // OAuth callback page (served at /oauth/callback)
+    if (req.url.startsWith("/oauth/callback")) {
+      sendFile(res, "public/oauth-callback.html", "text/html");
+      return;
+    }
+
     // Static files
     let filePath = req.url === "/" ? "/index.html" : req.url;
     // Strip query strings
@@ -1321,15 +1792,17 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log("");
-  console.log("  ┌──────────────────────────────────────────────┐");
-  console.log("  │                                              │");
-  console.log("  │   Audrique Scenario Studio                   │");
-  console.log(`  │   http://localhost:${PORT}                      │`);
-  console.log("  │                                              │");
-  console.log("  │   Press Ctrl+C to stop                       │");
-  console.log("  │                                              │");
-  console.log("  └──────────────────────────────────────────────┘");
-  console.log("");
+resolveOAuthKeysFromVault().then(() => {
+  server.listen(PORT, () => {
+    console.log("");
+    console.log("  ┌──────────────────────────────────────────────┐");
+    console.log("  │                                              │");
+    console.log("  │   Audrique Scenario Studio                   │");
+    console.log(`  │   http://localhost:${PORT}                      │`);
+    console.log("  │                                              │");
+    console.log("  │   Press Ctrl+C to stop                       │");
+    console.log("  │                                              │");
+    console.log("  └──────────────────────────────────────────────┘");
+    console.log("");
+  });
 });

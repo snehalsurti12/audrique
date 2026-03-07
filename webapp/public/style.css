@@ -1294,6 +1294,38 @@ body {
   border-bottom-color: var(--accent);
 }
 
+/* ── Connection form tabs ────────────────────────────────────────────────── */
+
+.conn-tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin: 16px 0 12px;
+}
+
+.conn-tab-btn {
+  padding: 8px 18px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all var(--transition);
+}
+
+.conn-tab-btn:hover { color: var(--text-primary); }
+.conn-tab-btn.active {
+  color: var(--accent-light);
+  border-bottom-color: var(--accent);
+}
+
+.conn-tab-panel {
+  padding-top: 8px;
+}
+
 /* ── Live Flow NL Summary ────────────────────────────────────────────────── */
 
 .lf-nl-summary {
@@ -1959,6 +1991,20 @@ body {
   border-radius: var(--radius-md);
   padding: 8px 12px;
   margin-bottom: 14px;
+}
+
+.cred-hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.cred-hint code {
+  background: rgba(99, 102, 241, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--primary);
 }
 
 .cred-section-title {

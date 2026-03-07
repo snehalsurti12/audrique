@@ -4,7 +4,30 @@ import crypto from "node:crypto";
 import { chromium } from "playwright";
 
 async function main() {
-  const loginUrl = must("SF_LOGIN_URL");
+  const loginUrl = (process.env.SF_LOGIN_URL || "").trim();
+
+  // Fast path: use OAuth + frontdoor.jsp when configured
+  // (mirrors the Connect CCP federation fast path in capture-connect-session.mjs)
+  const sfAuthMethod = (process.env.SF_AUTH_METHOD || "").trim().toLowerCase();
+  const oauthConsumerKey = (process.env.SF_OAUTH_CONSUMER_KEY || "").trim();
+  if (sfAuthMethod === "oauth" || (oauthConsumerKey && sfAuthMethod !== "password")) {
+    console.log("OAuth Connected App credentials detected. Using OAuth auth (fast path)...");
+    const { tryOAuthRefreshAuth } = await import("./sf-oauth-auth.mjs");
+    const result = await tryOAuthRefreshAuth({
+      consumerKey: oauthConsumerKey,
+      consumerSecret: (process.env.SF_OAUTH_CONSUMER_SECRET || "").trim(),
+      loginUrl: loginUrl || "https://login.salesforce.com",
+      storageStatePath: process.env.SF_STORAGE_STATE || ".auth/sf-agent.json",
+      appName: (process.env.SF_APP_NAME || "Service Console").trim(),
+      profileId: (process.env.INSTANCE || "default").trim(),
+    });
+    if (result.success) return;
+    console.error(`[sf-login] OAuth auth failed: ${result.error}`);
+    throw new Error(`OAuth auth failed: ${result.error}`);
+  }
+
+  // Standard password-based login flow
+  if (!loginUrl) throw new Error("Missing env var: SF_LOGIN_URL");
   const username = must("SF_USERNAME");
   const password = must("SF_PASSWORD");
   const serviceConsoleUrl = (process.env.SF_SERVICE_CONSOLE_URL || "").trim();

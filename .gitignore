@@ -8,6 +8,9 @@ playwright-report/
 # Auth sessions (cookies, tokens, storage states)
 .auth/
 
+# Root .env (bundled OAuth secrets, server config)
+.env
+
 # Instance-specific env files (may contain vault refs, org URLs)
 # Keep *.example files for reference
 instances/*.env
@@ -32,6 +35,11 @@ instances/.vault-auth.json
 *.swp
 *.swo
 *~
+
+# Build artifacts (intermediate frames, palettes)
+artifacts/demo-gif/*.png
+artifacts/demo-gif/*.txt
+screenshots/
 
 # OS
 Thumbs.db

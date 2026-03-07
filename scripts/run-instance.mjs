@@ -324,9 +324,15 @@ async function resolveSecretReferences(env, backend) {
     const secretRef = refValue.trim();
     const cacheKey = `${backend}:${secretRef}`;
     if (!cache.has(cacheKey)) {
-      cache.set(cacheKey, await readSecretValue({ backend, secretRef, env }));
+      try {
+        cache.set(cacheKey, await readSecretValue({ backend, secretRef, env }));
+      } catch (e) {
+        console.warn(`[secrets] Warning: could not resolve ${targetKey} from ${secretRef}: ${e.message}`);
+        cache.set(cacheKey, null);
+      }
     }
-    resolved[targetKey] = cache.get(cacheKey);
+    const val = cache.get(cacheKey);
+    if (val != null) resolved[targetKey] = val;
   }
 
   return resolved;

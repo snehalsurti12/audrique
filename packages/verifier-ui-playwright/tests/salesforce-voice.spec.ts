@@ -3,6 +3,8 @@ import fs from "node:fs";
 import { dialInboundCall, hangupCall } from "../src/twilioInbound";
 import { dialFromConnectCcp } from "../src/connectCcpDialer";
 import type { ConnectCcpSession, IvrStep } from "../src/connectCcpDialer";
+import { saveIvrRecording, getIvrRecording } from "../src/ivrSpeechDetector";
+import { transcribeAudioChunk, isWhisperAvailable as isWhisperReady } from "../src/ivrWhisperTranscriber";
 import {
   escapeRegex,
   resolveSalesforceStartTarget,
@@ -97,23 +99,35 @@ import {
   renderAssertionSummary,
   type VisualAssertionEntry,
 } from "../src/sfOverlays";
+import {
+  startAgentforceObserver,
+  type AgentforceObserverSession,
+} from "../src/sfAgentforceObserver";
+import {
+  dialParallelCalls,
+  cleanupParallelCalls,
+  type CallSource,
+  type ParallelDialResult,
+} from "../src/parallelDialer";
 
 test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
   test("dials Connect number and verifies incoming call + VoiceCall screen pop", async ({ page }) => {
-    const requiredAssertions = [
-      "Call connected",
-      "VoiceCall record created",
-      "Call type = Inbound",
-      "Owner = correct agent"
-    ];
+    const skipLogin = process.env.SF_SKIP_LOGIN === "true";
+    const callTriggerMode = (process.env.CALL_TRIGGER_MODE ?? "twilio").toLowerCase();
+    const callExpectation = (process.env.CALL_EXPECTATION ?? "agent_offer").toLowerCase();
+    const requiredAssertions = callExpectation === "dial_only" || callExpectation === "parallel_agentforce"
+      ? ["CCP call connected", "Agentforce greeting heard"]
+      : [
+          "Call connected",
+          "VoiceCall record created",
+          "Call type = Inbound",
+          "Owner = correct agent"
+        ];
     const assertionLog: VisualAssertionEntry[] = [];
     const timeline: E2eTimeline = {
       testStartMs: Date.now(),
       callTriggerMode: (process.env.CALL_TRIGGER_MODE ?? "twilio").toLowerCase()
     };
-    const skipLogin = process.env.SF_SKIP_LOGIN === "true";
-    const callTriggerMode = (process.env.CALL_TRIGGER_MODE ?? "twilio").toLowerCase();
-    const callExpectation = (process.env.CALL_EXPECTATION ?? "agent_offer").toLowerCase();
     const serviceConsoleUrl = process.env.SF_SERVICE_CONSOLE_URL?.trim() || "";
     const appName = process.env.SF_APP_NAME?.trim() || "";
     if (!appName) {
@@ -147,10 +161,10 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
     // Include provider login recovery time so the test doesn't timeout before recovery completes.
     // CCP warmup makes this fast (~30s), but keep the full timeout as fallback.
     test.setTimeout((ringTimeoutSec + timeoutPaddingSec + providerLoginTimeoutSec) * 1000);
-    if (callTriggerMode !== "twilio" && callTriggerMode !== "manual" && callTriggerMode !== "connect_ccp") {
+    if (callTriggerMode !== "twilio" && callTriggerMode !== "manual" && callTriggerMode !== "connect_ccp" && callTriggerMode !== "nl_caller") {
       throw new Error(`Unsupported CALL_TRIGGER_MODE: ${callTriggerMode}`);
     }
-    if (callExpectation !== "agent_offer" && callExpectation !== "business_hours_blocked") {
+    if (callExpectation !== "agent_offer" && callExpectation !== "business_hours_blocked" && callExpectation !== "dial_only" && callExpectation !== "parallel_agentforce") {
       throw new Error(`Unsupported CALL_EXPECTATION: ${callExpectation}`);
     }
     if (verifySupervisorQueue) {
@@ -197,30 +211,32 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
     // Close stale VoiceCall tabs from prior scenarios before preflight.
     // Leftover tabs can hold the agent in ACW/Offline and block Omni recovery.
     await closeAllVoiceCallTabs(page).catch(() => 0);
-    await ensurePhoneUtilityOpen(page);
-    const uiReadiness = await collectUiReadiness(page, appName);
-    test.info().annotations.push({
-      type: "ui.readiness",
-      description: JSON.stringify(uiReadiness)
-    });
     const targetOmniStatus = process.env.OMNI_TARGET_STATUS?.trim() || "Available";
-    const preflight = await assertAgentPreflightReady(page, targetOmniStatus);
-    test.info().annotations.push({
-      type: "agent.preflight",
-      description: JSON.stringify(preflight)
-    });
-    await pushVisualAssertion(page, assertionLog, {
-      label: "Preflight: Omni-Channel ready",
-      passed: true,
-      details: preflight.omniStatus
-    });
-    await holdForVideo(page, preflightDetailHoldSec * 1000);
-    await pushVisualAssertion(page, assertionLog, {
-      label: "Preflight: Provider status synced",
-      passed: preflight.providerState === "routable",
-      details: `Provider state=${preflight.providerState}`
-    });
-    await holdForVideo(page, preflightDetailHoldSec * 1000);
+    if (callExpectation !== "dial_only" && callExpectation !== "parallel_agentforce") {
+      await ensurePhoneUtilityOpen(page);
+      const uiReadiness = await collectUiReadiness(page, appName);
+      test.info().annotations.push({
+        type: "ui.readiness",
+        description: JSON.stringify(uiReadiness)
+      });
+      const preflight = await assertAgentPreflightReady(page, targetOmniStatus);
+      test.info().annotations.push({
+        type: "agent.preflight",
+        description: JSON.stringify(preflight)
+      });
+      await pushVisualAssertion(page, assertionLog, {
+        label: "Preflight: Omni-Channel ready",
+        passed: true,
+        details: preflight.omniStatus
+      });
+      await holdForVideo(page, preflightDetailHoldSec * 1000);
+      await pushVisualAssertion(page, assertionLog, {
+        label: "Preflight: Provider status synced",
+        passed: preflight.providerState === "routable",
+        details: `Provider state=${preflight.providerState}`
+      });
+      await holdForVideo(page, preflightDetailHoldSec * 1000);
+    }
     timeline.preflightReadyMs = Date.now();
 
     let baselineVoiceTabs = await countVoiceCallTabs(page);
@@ -416,6 +432,88 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
           type: "connect.ccp.dialed",
           description: requiredEnv("CONNECT_ENTRYPOINT_NUMBER")
         });
+      } else if (callTriggerMode === "nl_caller") {
+        timeline.callTriggerStartMs = Date.now();
+        // NL Caller: start WebSocket server, place Twilio call with Stream TwiML
+        const { createConversationEngine } = await import("../../nl-caller/conversationEngine.mjs" as any);
+        const { createNlCallerServer } = await import("../../nl-caller/server.mjs" as any);
+        const { evaluateAssertions, writeTranscript } = await import("../../nl-caller/transcriptWriter.mjs" as any);
+
+        const nlMode = process.env.NL_CALLER_MODE || "gemini";
+        const nlEngine = createConversationEngine({
+          mode: nlMode,
+          persona: {
+            name: process.env.NL_CALLER_PERSONA_NAME || "Customer",
+            accountNumber: process.env.NL_CALLER_PERSONA_ACCOUNT || "",
+            context: process.env.NL_CALLER_PERSONA_CONTEXT || "",
+            objective: process.env.NL_CALLER_PERSONA_OBJECTIVE || "",
+          },
+          gemini: {
+            apiKey: process.env.GEMINI_API_KEY || "",
+            model: process.env.NL_CALLER_GEMINI_MODEL || undefined,
+          },
+          scripted: {
+            conversation: process.env.NL_CALLER_CONVERSATION_SCRIPT
+              ? JSON.parse(process.env.NL_CALLER_CONVERSATION_SCRIPT) : [],
+          },
+          maxTurns: Number(process.env.NL_CALLER_MAX_TURNS ?? 15),
+          turnTimeoutSec: Number(process.env.NL_CALLER_TURN_TIMEOUT_SEC ?? 30),
+        });
+
+        const nlPort = 8765;
+        const nlServer = createNlCallerServer({ port: nlPort, engine: nlEngine });
+
+        // Place Twilio call with Stream TwiML pointing to our server
+        const twilioCall = await dialInboundCall({
+          accountSid: requiredEnv("TWILIO_ACCOUNT_SID"),
+          authToken: requiredEnv("TWILIO_AUTH_TOKEN"),
+          from: requiredEnv("TWILIO_FROM_NUMBER"),
+          to: requiredEnv("CONNECT_ENTRYPOINT_NUMBER"),
+          twimlUrl: `http://localhost:${nlPort}/twiml`,
+        });
+        twilioCallSid = twilioCall.callSid;
+
+        test.info().annotations.push({
+          type: "nl_caller.mode", description: nlMode,
+        });
+        test.info().annotations.push({
+          type: "twilio.callSid", description: twilioCall.callSid,
+        });
+
+        // Wait for conversation to complete (or timeout)
+        const nlResult = await Promise.race([
+          nlEngine.waitForComplete(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("NL Caller conversation timeout")),
+              Number(process.env.NL_CALLER_MAX_DURATION_SEC ?? 120) * 1000)),
+        ]) as any;
+
+        // Save transcript
+        const artifactDir = process.env.NL_CALLER_ARTIFACT_DIR || "test-results/nl-caller";
+        const assertionsRaw = process.env.NL_CALLER_ASSERTIONS;
+        const assertions = assertionsRaw ? JSON.parse(assertionsRaw) : [];
+        const assertionResults = evaluateAssertions(
+          nlResult?.transcript || nlEngine.getTranscript(),
+          assertions,
+          { objective: process.env.NL_CALLER_PERSONA_OBJECTIVE || "" },
+        );
+        writeTranscript({
+          outputDir: artifactDir,
+          transcript: nlResult?.transcript || nlEngine.getTranscript(),
+          assertionResults,
+          metadata: {
+            mode: nlMode,
+            persona: { name: process.env.NL_CALLER_PERSONA_NAME },
+            durationSec: nlResult?.durationSec || 0,
+          },
+        });
+
+        test.info().annotations.push({
+          type: "nl_caller.transcript",
+          description: `${nlEngine.getTurnCount()} turns, ${assertionResults.filter((a: any) => a.passed).length}/${assertionResults.length} assertions passed`,
+        });
+
+        await nlServer.close();
       } else {
         timeline.callTriggerStartMs = Date.now();
         test.info().annotations.push({
@@ -425,6 +523,317 @@ test.describe("Salesforce Service Cloud Voice Inbound E2E", () => {
         });
         // Small pause to let operator start the manual call.
         await page.waitForTimeout(3000);
+      }
+
+      // ── dial_only: verify CCP connects, listen to Agentforce greeting, transcribe ──
+      if (callExpectation === "dial_only" && connectCcpSession) {
+        const dialOnlyListenSec = Number(process.env.DIAL_ONLY_LISTEN_SEC ?? 15);
+        const ccpPage = connectCcpSession.page;
+        // Wait for CCP to show "Connected" / "In call" state
+        const ccpConnectedTimeoutMs = Number(process.env.CCP_CONNECTED_READY_TIMEOUT_SEC ?? 30) * 1000;
+        const ccpDeadline = Date.now() + ccpConnectedTimeoutMs;
+        let ccpConnected = false;
+        while (Date.now() < ccpDeadline) {
+          const body = (await ccpPage.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+          if (/connected call|in call/i.test(body)) {
+            ccpConnected = true;
+            break;
+          }
+          await ccpPage.waitForTimeout(500);
+        }
+        await assertAndMark(page, assertionLog, "CCP call connected", async () => {
+          expect(ccpConnected, "Expected CCP to show connected call state").toBeTruthy();
+          return "CCP shows connected call state.";
+        });
+        timeline.incomingDetectedMs = Date.now();
+
+        // Listen to the Agentforce greeting — hold the call while audio records
+        console.log(`[dial_only] Call connected. Listening for ${dialOnlyListenSec}s to capture Agentforce greeting...`);
+        await ccpPage.waitForTimeout(dialOnlyListenSec * 1000);
+
+        // Transcribe the captured audio with Whisper
+        let transcript = "";
+        const expectedGreeting = process.env.DIAL_ONLY_EXPECTED_GREETING?.trim() || "";
+        const audioBuffer = await getIvrRecording(ccpPage);
+        if (audioBuffer && audioBuffer.length > 0) {
+          // Save the recording as artifact
+          const artifactDir = test.info().outputPath(".");
+          const audioPath = await saveIvrRecording(ccpPage, artifactDir);
+          if (audioPath) {
+            await test.info().attach("agentforce-greeting-audio", {
+              path: audioPath,
+              contentType: "audio/webm"
+            });
+          }
+          // Transcribe with Whisper
+          if (isWhisperReady()) {
+            try {
+              const result = await transcribeAudioChunk(audioBuffer, {
+                language: process.env.IVR_LANGUAGE?.trim() || "en",
+              });
+              transcript = result.text?.trim() || "";
+              console.log(`[dial_only] Whisper transcript: "${transcript}"`);
+            } catch (err) {
+              console.warn(`[dial_only] Whisper transcription failed: ${err}`);
+            }
+          } else {
+            console.warn("[dial_only] Whisper not available — skipping transcription. Audio saved as artifact.");
+          }
+        } else {
+          console.warn("[dial_only] No audio captured from CCP page.");
+        }
+
+        // Assert: first prompt played (we got audio + transcription)
+        await assertAndMark(page, assertionLog, "Agentforce greeting heard", async () => {
+          if (transcript) {
+            return `Transcript: "${transcript}"`;
+          }
+          // Even without transcription, if audio was captured that's a signal
+          expect(
+            audioBuffer && audioBuffer.length > 0,
+            "Expected to capture audio from Agentforce greeting"
+          ).toBeTruthy();
+          return "Audio captured (transcription unavailable).";
+        });
+
+        // Assert: expected greeting keywords if configured
+        if (expectedGreeting && transcript) {
+          await assertAndMark(page, assertionLog, "Greeting matches expected", async () => {
+            const keywords = expectedGreeting.split("|").map(k => k.trim().toLowerCase());
+            const transcriptLower = transcript.toLowerCase();
+            const matched = keywords.filter(k => transcriptLower.includes(k));
+            expect(
+              matched.length > 0,
+              `Expected transcript to contain one of [${keywords.join(", ")}], got: "${transcript}"`
+            ).toBeTruthy();
+            return `Matched: [${matched.join(", ")}] in "${transcript}"`;
+          });
+        }
+
+        test.info().annotations.push({
+          type: "dial_only.transcript",
+          description: transcript || "(no transcription)"
+        });
+
+        // Take a screenshot of the connected CCP
+        await ccpPage.screenshot({ path: "test-results/connect-ccp-dial-only-connected.png", fullPage: true }).catch(() => undefined);
+        // Write timeline and end
+        timeline.testEndMs = Date.now();
+        const timelinePath = test.info().outputPath("e2e-timeline.json");
+        fs.writeFileSync(timelinePath, JSON.stringify(timeline, null, 2), "utf8");
+        await test.info().attach("e2e-timeline", { path: timelinePath, contentType: "application/json" });
+        await renderAssertionOverlay(page, assertionLog);
+        await page.waitForTimeout(1500);
+        await page.screenshot({ path: test.info().outputPath("test-passed-dial-only.png"), fullPage: true }).catch(() => undefined);
+        return; // Skip all SF-side agent_offer assertions
+      }
+
+      // ── parallel_agentforce: launch N concurrent calls + verify Agentforce tab ──
+      if (callExpectation === "parallel_agentforce" && connectCcpSession) {
+        const dialOnlyListenSec = Number(process.env.DIAL_ONLY_LISTEN_SEC ?? 15);
+        const ccpPage = connectCcpSession.page;
+
+        // Parse parallel call sources from env
+        const parallelCallSourcesRaw = process.env.PARALLEL_CALL_SOURCES?.trim() || "[]";
+        let parallelCallSources: CallSource[] = [];
+        try {
+          const parsed = JSON.parse(parallelCallSourcesRaw);
+          parallelCallSources = parsed.map((s: any, i: number) => ({
+            provider: s.provider || "twilio",
+            index: i,
+          }));
+        } catch {
+          console.warn("[parallel_agentforce] Failed to parse PARALLEL_CALL_SOURCES — no additional calls.");
+        }
+
+        const verifyAgentforceTab = process.env.VERIFY_AGENTFORCE_TAB === "true";
+        const expectedCount = Number(process.env.PARALLEL_AGENTFORCE_EXPECTED_COUNT ?? (1 + parallelCallSources.length));
+        const agentforceTimeoutMs = Number(process.env.AGENTFORCE_OBSERVATION_TIMEOUT_SEC ?? 120) * 1000;
+
+        // Add required assertions for parallel calls
+        for (const src of parallelCallSources) {
+          requiredAssertions.push(`Parallel call ${src.provider}#${src.index} connected`);
+        }
+        if (verifyAgentforceTab) {
+          requiredAssertions.push("Agentforce active count reached");
+        }
+
+        // Start Agentforce observer (if enabled) BEFORE launching parallel calls
+        let agentforceSession: AgentforceObserverSession | undefined;
+        if (verifyAgentforceTab) {
+          console.log("[parallel_agentforce] Starting Agentforce observer...");
+          try {
+            agentforceSession = await startAgentforceObserver({
+              agentPage: page,
+              targetUrl: serviceConsoleTarget || page.url(),
+              appName,
+              supervisorAppName: supervisorAppName || "Command Center for Service",
+              expectedCount,
+              timeoutMs: agentforceTimeoutMs,
+            });
+            console.log(`[parallel_agentforce] Agentforce observer started. Baseline: ${agentforceSession.baselineSnapshot.signature}`);
+            (timeline as any).agentforceObserverStartedMs = Date.now();
+          } catch (err: any) {
+            console.warn(`[parallel_agentforce] Agentforce observer failed to start: ${err?.message}`);
+          }
+        }
+
+        // Wait for primary CCP call to connect (same as dial_only)
+        const ccpConnectedTimeoutMs = Number(process.env.CCP_CONNECTED_READY_TIMEOUT_SEC ?? 30) * 1000;
+        const ccpDeadline = Date.now() + ccpConnectedTimeoutMs;
+        let ccpConnected = false;
+        while (Date.now() < ccpDeadline) {
+          const body = (await ccpPage.locator("body").innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+          if (/connected call|in call/i.test(body)) {
+            ccpConnected = true;
+            break;
+          }
+          await ccpPage.waitForTimeout(500);
+        }
+        await assertAndMark(page, assertionLog, "CCP call connected", async () => {
+          expect(ccpConnected, "Expected CCP to show connected call state").toBeTruthy();
+          return "CCP shows connected call state.";
+        });
+        timeline.incomingDetectedMs = Date.now();
+
+        // Launch parallel calls concurrently
+        let parallelResults: ParallelDialResult[] = [];
+        if (parallelCallSources.length > 0) {
+          console.log(`[parallel_agentforce] Launching ${parallelCallSources.length} parallel calls...`);
+          const entryNumber = process.env.CONNECT_ENTRYPOINT_NUMBER?.trim() || "";
+          parallelResults = await dialParallelCalls({
+            sources: parallelCallSources,
+            entryNumber,
+            browser: page.context().browser()!,
+            ccpUrl: process.env.CONNECT_CCP_URL?.trim(),
+            ccpStorageStatePath: process.env.CONNECT_STORAGE_STATE?.trim(),
+            ccpDialTimeoutMs: 30_000,
+            twilioAccountSid: process.env.TWILIO_ACCOUNT_SID?.trim(),
+            twilioAuthToken: process.env.TWILIO_AUTH_TOKEN?.trim(),
+            twilioFromNumber: process.env.TWILIO_FROM_NUMBER?.trim(),
+          });
+
+          (timeline as any).parallelCallsLaunchedMs = Date.now();
+
+          // Assert each parallel call connected
+          for (const result of parallelResults) {
+            const label = `Parallel call ${result.source.provider}#${result.source.index} connected`;
+            await assertAndMark(page, assertionLog, label, async () => {
+              expect(
+                result.status,
+                `Expected parallel call ${result.source.provider}#${result.source.index} to connect, got: ${result.error || "unknown"}`
+              ).toBe("connected");
+              return `${result.source.provider} call connected${result.callSid ? ` (SID: ${result.callSid})` : ""}.`;
+            });
+          }
+        }
+
+        // Listen to Agentforce greeting (same as dial_only)
+        console.log(`[parallel_agentforce] Listening for ${dialOnlyListenSec}s to capture Agentforce greeting...`);
+        await ccpPage.waitForTimeout(dialOnlyListenSec * 1000);
+
+        // Transcribe the captured audio with Whisper
+        let transcript = "";
+        const expectedGreeting = process.env.DIAL_ONLY_EXPECTED_GREETING?.trim() || "";
+        const audioBuffer = await getIvrRecording(ccpPage);
+        if (audioBuffer && audioBuffer.length > 0) {
+          const artifactDir = test.info().outputPath(".");
+          const audioPath = await saveIvrRecording(ccpPage, artifactDir);
+          if (audioPath) {
+            await test.info().attach("agentforce-greeting-audio", {
+              path: audioPath,
+              contentType: "audio/webm"
+            });
+          }
+          if (isWhisperReady()) {
+            try {
+              const result = await transcribeAudioChunk(audioBuffer, {
+                language: process.env.IVR_LANGUAGE?.trim() || "en",
+              });
+              transcript = result.text?.trim() || "";
+              console.log(`[parallel_agentforce] Whisper transcript: "${transcript}"`);
+            } catch (err) {
+              console.warn(`[parallel_agentforce] Whisper transcription failed: ${err}`);
+            }
+          }
+        }
+
+        await assertAndMark(page, assertionLog, "Agentforce greeting heard", async () => {
+          if (transcript) {
+            return `Transcript: "${transcript}"`;
+          }
+          expect(
+            audioBuffer && audioBuffer.length > 0,
+            "Expected to capture audio from Agentforce greeting"
+          ).toBeTruthy();
+          return "Audio captured (transcription unavailable).";
+        });
+
+        if (expectedGreeting && transcript) {
+          await assertAndMark(page, assertionLog, "Greeting matches expected", async () => {
+            const keywords = expectedGreeting.split("|").map(k => k.trim().toLowerCase());
+            const transcriptLower = transcript.toLowerCase();
+            const matched = keywords.filter(k => transcriptLower.includes(k));
+            expect(
+              matched.length > 0,
+              `Expected transcript to contain one of [${keywords.join(", ")}], got: "${transcript}"`
+            ).toBeTruthy();
+            return `Matched: [${matched.join(", ")}] in "${transcript}"`;
+          });
+        }
+
+        // Wait for Agentforce observer to reach expected count
+        if (verifyAgentforceTab && agentforceSession) {
+          console.log(`[parallel_agentforce] Waiting for Agentforce count >= ${expectedCount}...`);
+          const agentforceResult = await agentforceSession.observation;
+          (timeline as any).agentforceCountReachedMs = Date.now();
+          await assertAndMark(page, assertionLog, "Agentforce active count reached", async () => {
+            expect(
+              agentforceResult.totalActive,
+              `Expected >= ${expectedCount} active Agentforce conversations, got ${agentforceResult.totalActive} (source: ${agentforceResult.source})`
+            ).toBeGreaterThanOrEqual(expectedCount);
+            return `Agentforce active: ${agentforceResult.totalActive} (source: ${agentforceResult.source}, signature: ${agentforceResult.signature})`;
+          });
+        }
+
+        test.info().annotations.push({
+          type: "parallel_agentforce.summary",
+          description: `Primary CCP + ${parallelCallSources.length} parallel calls. ${parallelResults.filter(r => r.status === "connected").length} connected.${transcript ? ` Transcript: "${transcript}"` : ""}`
+        });
+
+        // Screenshot evidence
+        await ccpPage.screenshot({ path: "test-results/connect-ccp-parallel-connected.png", fullPage: true }).catch(() => undefined);
+
+        // Cleanup: hang up parallel calls
+        if (parallelResults.length > 0) {
+          const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID?.trim();
+          const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+          await cleanupParallelCalls(
+            parallelResults,
+            twilioAccountSid && twilioAuthToken ? { accountSid: twilioAccountSid, authToken: twilioAuthToken } : undefined
+          );
+        }
+
+        // Cleanup Agentforce observer + capture video
+        if (agentforceSession) {
+          await agentforceSession.end();
+          if (agentforceSession.videoPath && fs.existsSync(agentforceSession.videoPath)) {
+            await test.info().attach("agentforce-observer-video", {
+              path: agentforceSession.videoPath,
+              contentType: "video/webm",
+            });
+          }
+        }
+
+        // Write timeline and end
+        timeline.testEndMs = Date.now();
+        const timelinePath = test.info().outputPath("e2e-timeline.json");
+        fs.writeFileSync(timelinePath, JSON.stringify(timeline, null, 2), "utf8");
+        await test.info().attach("e2e-timeline", { path: timelinePath, contentType: "application/json" });
+        await renderAssertionOverlay(page, assertionLog);
+        await page.waitForTimeout(1500);
+        await page.screenshot({ path: test.info().outputPath("test-passed-parallel-agentforce.png"), fullPage: true }).catch(() => undefined);
+        return; // Skip all SF-side agent_offer assertions
       }
 
       const queueObservationPromise =

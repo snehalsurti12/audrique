@@ -187,6 +187,7 @@ function bindGlobalEvents() {
 
   // Run panel
   document.getElementById("btn-run-suite").addEventListener("click", () => openRunPanel(false));
+  document.getElementById("btn-run-live").addEventListener("click", () => startRun(false));
   document.getElementById("btn-run-dry").addEventListener("click", () => startRun(true));
   document.getElementById("btn-run-stop").addEventListener("click", stopRun);
   document.getElementById("btn-run-close").addEventListener("click", closeRunPanel);
@@ -435,6 +436,15 @@ function defaultAnswers() {
     extension: "",
     // Call outcome
     callOutcome: "agent_answer",
+    // Dial-only (Agentforce / AI agent)
+    dialOnlyListenSec: 15,
+    dialOnlyExpectedGreeting: "hi|hello|welcome|help|assist",
+    dialOnlySaveRecording: true,
+    // Parallel call sources (for AI Agent / Agentforce testing)
+    parallelCallSources: [],
+    verifyAgentforceTab: false,
+    parallelExpectedCount: 2,
+    agentforceObservationTimeoutSec: 120,
     // Business hours
     callTiming: "now",
     // Voicemail
@@ -519,8 +529,10 @@ function scenarioToAnswers(s) {
   const isClosedHours = ct.noAgentBehavior === "prompt_and_disconnect" || (ct.callTiming?.window === "after_hours") || (hasClosedPrompt && disconnectStep && !vmStep && !cbStep);
   const isVoicemail = ct.noAgentBehavior === "voicemail" || !!vmStep;
   const isCallback = ct.noAgentBehavior === "callback" || !!cbStep;
+  const isDialOnly = ct.expectation === "dial_only" || ct.expectation === "parallel_agentforce";
   let callOutcome = "agent_answer";
-  if (isClosedHours) callOutcome = "closed_hours";
+  if (isDialOnly) callOutcome = "dial_only";
+  else if (isClosedHours) callOutcome = "closed_hours";
   else if (isVoicemail) callOutcome = "voicemail";
   else if (isCallback) callOutcome = "callback";
 
@@ -569,6 +581,15 @@ function scenarioToAnswers(s) {
     extension: ct.extension || "",
     // Call outcome
     callOutcome,
+    // Dial-only (AI Agent)
+    dialOnlyListenSec: ct.dialOnlyListenSec || 15,
+    dialOnlyExpectedGreeting: ct.dialOnlyExpectedGreeting || "hi|hello|welcome|help|assist",
+    dialOnlySaveRecording: ct.dialOnlySaveRecording !== false,
+    // Parallel call sources
+    parallelCallSources: ct.parallelCallSources || [],
+    verifyAgentforceTab: !!ct.verifyAgentforceTab,
+    parallelExpectedCount: ct.parallelExpectedCount || 2,
+    agentforceObservationTimeoutSec: ct.agentforceObservationTimeoutSec || 120,
     callTiming: ct.callTiming?.window || "now",
     // Voicemail
     voicemailText: vmStep?.voicemailText || "Hi, I am calling about my account. Please call me back.",
@@ -649,7 +670,7 @@ function showLanding() {
 function shouldSkipStep(stepId) {
   const a = state.answers;
   const noAgent = a.callOutcome && a.callOutcome !== "agent_answer";
-  // For non-agent outcomes (voicemail, callback, closed hours), skip agent/conversation/supervisor
+  // For non-agent outcomes (voicemail, callback, closed hours, dial_only), skip agent/conversation/supervisor
   if (noAgent && (stepId === "agent" || stepId === "conversation" || stepId === "supervisor")) return true;
   if (stepId === "conversation" && !a.conversationEnabled) return true;
   if (stepId === "supervisor" && !a.supervisorEnabled && !a.targetQueue) return true;
@@ -693,6 +714,22 @@ function collectCurrentStepAnswers() {
       state.answers.entryNumber = val("entry-number") || state.answers.entryNumber;
       state.answers.callMode = getSelectedOption("call-mode") || state.answers.callMode;
       state.answers.callOutcome = getSelectedOption("call-outcome") || state.answers.callOutcome;
+      // NL Caller fields
+      state.answers.nlCallerMode = getSelectedOption("nl-caller-mode") || state.answers.nlCallerMode;
+      state.answers.nlPersonaName = val("nl-persona-name") || state.answers.nlPersonaName;
+      state.answers.nlPersonaAccount = val("nl-persona-account") || state.answers.nlPersonaAccount;
+      state.answers.nlPersonaContext = val("nl-persona-context") || state.answers.nlPersonaContext;
+      state.answers.nlPersonaObjective = val("nl-persona-objective") || state.answers.nlPersonaObjective;
+      state.answers.nlMaxTurns = parseInt(val("nl-max-turns") || "15", 10);
+      state.answers.nlTurnTimeout = parseInt(val("nl-turn-timeout") || "30", 10);
+      // Scripted steps
+      const scriptSteps = [];
+      document.querySelectorAll(".nl-script-step").forEach((el) => {
+        const keywords = el.querySelector(".nl-script-keywords")?.value || "";
+        const say = el.querySelector(".nl-script-say")?.value || "";
+        if (keywords || say) scriptSteps.push({ keywords, say });
+      });
+      if (scriptSteps.length > 0) state.answers.nlScriptSteps = scriptSteps;
       // Voicemail fields
       state.answers.voicemailText = val("voicemail-text") || state.answers.voicemailText;
       state.answers.voicemailDurationSec = parseInt(val("voicemail-duration") || String(state.answers.voicemailDurationSec), 10);
@@ -700,6 +737,20 @@ function collectCurrentStepAnswers() {
       state.answers.callbackPhone = val("callback-phone") || state.answers.callbackPhone;
       // Closed hours fields
       state.answers.closedMessageText = val("closed-message-text") || state.answers.closedMessageText;
+      // Dial-only (AI Agent) fields
+      state.answers.dialOnlyListenSec = parseInt(val("dial-only-listen-sec") || String(state.answers.dialOnlyListenSec), 10);
+      state.answers.dialOnlyExpectedGreeting = val("dial-only-expected-greeting") ?? state.answers.dialOnlyExpectedGreeting;
+      state.answers.dialOnlySaveRecording = isChecked("dial-only-save-recording");
+      // Parallel call sources
+      const parallelSources = [];
+      document.querySelectorAll(".parallel-source-row").forEach((row) => {
+        const provider = row.querySelector(".parallel-source-provider")?.value || "twilio";
+        parallelSources.push({ provider });
+      });
+      state.answers.parallelCallSources = parallelSources;
+      state.answers.verifyAgentforceTab = isChecked("verify-agentforce-tab");
+      state.answers.parallelExpectedCount = parseInt(val("parallel-expected-count") || String(state.answers.parallelExpectedCount), 10);
+      state.answers.agentforceObservationTimeoutSec = parseInt(val("agentforce-observation-timeout") || String(state.answers.agentforceObservationTimeoutSec), 10);
       // Greeting verification
       state.answers.verifyGreeting = isChecked("verify-greeting");
       state.answers.greetingText = val("greeting-text") || state.answers.greetingText;
@@ -845,7 +896,8 @@ function renderCallStep() {
   const showVoicemail = a.callOutcome === "voicemail";
   const showCallback = a.callOutcome === "callback";
   const showClosed = a.callOutcome === "closed_hours";
-  const showPromptFields = a.callOutcome !== "agent_answer";
+  const showDialOnly = a.callOutcome === "dial_only";
+  const showPromptFields = a.callOutcome !== "agent_answer" && a.callOutcome !== "dial_only";
   return `
     <div class="wizard-step">
       <div class="step-header">
@@ -865,7 +917,72 @@ function renderCallStep() {
         <div class="option-cards" data-name="call-mode">
           ${optionCard("connect_ccp", "CCP Softphone", "Automated via Amazon Connect CCP panel", a.callMode === "connect_ccp")}
           ${optionCard("twilio", "Twilio API", "Call placed via Twilio programmable voice", a.callMode === "twilio")}
+          ${optionCard("nl_caller", "NL Caller", "AI-to-AI conversation with Agentforce", a.callMode === "nl_caller")}
           ${optionCard("manual", "Manual Dial", "Tester dials from a real phone", a.callMode === "manual")}
+        </div>
+      </div>
+
+      <!-- NL Caller Configuration (shown when nl_caller mode selected) -->
+      <div id="nl-caller-config" style="display: ${a.callMode === "nl_caller" ? "block" : "none"};">
+        <div class="section-divider"></div>
+        <h4 class="step-section-title">AI Caller Configuration</h4>
+
+        <div class="form-group">
+          <label class="form-label">Conversation Mode</label>
+          <div class="option-cards" data-name="nl-caller-mode">
+            ${optionCard("gemini", "Gemini Live", "AI-powered dynamic conversation via Google Gemini", (a.nlCallerMode || "gemini") === "gemini")}
+            ${optionCard("scripted", "Scripted", "Deterministic keyword-triggered responses", a.nlCallerMode === "scripted")}
+          </div>
+        </div>
+
+        <!-- Persona (for Gemini/LLM mode) -->
+        <div id="nl-caller-persona" style="display: ${a.nlCallerMode === "scripted" ? "none" : "block"};">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Caller Name</label>
+              <input type="text" class="form-input" id="nl-persona-name" value="${esc(a.nlPersonaName || "")}" placeholder="John Smith" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Account Number</label>
+              <input type="text" class="form-input" id="nl-persona-account" value="${esc(a.nlPersonaAccount || "")}" placeholder="ACC-12345" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Context</label>
+            <textarea class="form-input" id="nl-persona-context" rows="3" placeholder="Frustrated customer. Charged $49.99 for a service already cancelled.">${esc(a.nlPersonaContext || "")}</textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Objective</label>
+            <textarea class="form-input" id="nl-persona-objective" rows="2" placeholder="Get the duplicate charge refunded">${esc(a.nlPersonaObjective || "")}</textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Max Turns</label>
+              <input type="number" class="form-input" id="nl-max-turns" value="${a.nlMaxTurns || 15}" min="1" max="50" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Turn Timeout (sec)</label>
+              <input type="number" class="form-input" id="nl-turn-timeout" value="${a.nlTurnTimeout || 30}" min="5" max="120" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Scripted conversation (for scripted mode) -->
+        <div id="nl-caller-scripted" style="display: ${a.nlCallerMode === "scripted" ? "block" : "none"};">
+          <div class="form-group">
+            <label class="form-label">Conversation Script</label>
+            <div class="form-hint" style="margin-bottom: 8px;">Define turn-by-turn responses triggered by keywords from the AI agent.</div>
+            <div id="nl-script-steps">
+              ${(a.nlScriptSteps || [{ keywords: "", say: "" }]).map((step, i) => `
+                <div class="nl-script-step" style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
+                  <input type="text" class="form-input nl-script-keywords" value="${esc(step.keywords || "")}" placeholder="Keywords (comma-separated)" style="flex: 1;" />
+                  <input type="text" class="form-input nl-script-say" value="${esc(step.say || "")}" placeholder="Caller says..." style="flex: 2;" />
+                  <button type="button" class="btn btn-sm btn-ghost nl-script-remove" title="Remove">&times;</button>
+                </div>
+              `).join("")}
+            </div>
+            <button type="button" class="btn btn-sm btn-secondary" id="nl-script-add-step">+ Add Step</button>
+          </div>
         </div>
       </div>
 
@@ -876,6 +993,7 @@ function renderCallStep() {
         <div class="form-hint" style="margin-bottom: 8px;">What should happen when the call reaches your contact center?</div>
         <div class="option-cards" data-name="call-outcome">
           ${optionCard("agent_answer", "Agent Answers", "Call is routed to an agent who accepts it", a.callOutcome === "agent_answer")}
+          ${optionCard("dial_only", "AI Agent", "Call connects to Agentforce / AI agent — verify greeting", a.callOutcome === "dial_only")}
           ${optionCard("voicemail", "Voicemail", "No agent available — caller leaves voicemail", a.callOutcome === "voicemail")}
           ${optionCard("callback", "Callback", "Caller requests a callback instead of waiting", a.callOutcome === "callback")}
           ${optionCard("closed_hours", "Closed Hours", "Call outside business hours — plays closed message", a.callOutcome === "closed_hours")}
@@ -915,6 +1033,78 @@ function renderCallStep() {
         </div>
       </div>
 
+      <div id="dial-only-fields" class="${showDialOnly ? "" : "hidden"}">
+        <div class="form-group">
+          <label class="form-label">Listen Duration (seconds)</label>
+          <input class="form-input" id="dial-only-listen-sec" type="number" min="5" max="120"
+                 value="${a.dialOnlyListenSec}" style="width: 100px;" />
+          <div class="form-hint">How long to listen after the call connects (captures AI agent greeting)</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Expected Greeting Keywords</label>
+          <input class="form-input" id="dial-only-expected-greeting"
+                 placeholder="hi|hello|welcome|help|assist"
+                 value="${esc(a.dialOnlyExpectedGreeting)}" />
+          <div class="form-hint">Pipe-separated keywords to match in the AI agent's greeting transcript (e.g. hi|hello|assist)</div>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="tr-label">Save Audio Recording</div>
+            <div class="tr-desc">Capture and attach the AI agent's greeting audio as a test artifact</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="dial-only-save-recording" ${a.dialOnlySaveRecording ? "checked" : ""} />
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <div class="section-divider" style="margin: 16px 0;"></div>
+
+        <div class="form-group">
+          <label class="form-label">Parallel Call Sources</label>
+          <div class="form-hint" style="margin-bottom: 8px;">Add extra calls from different providers. All calls dial the entry number simultaneously.</div>
+          <div id="parallel-call-sources">
+            ${(a.parallelCallSources || []).map((src, i) => `
+              <div class="parallel-source-row" style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
+                <select class="form-input parallel-source-provider" style="flex: 1;">
+                  <option value="twilio" ${src.provider === "twilio" ? "selected" : ""}>Twilio</option>
+                  <option value="ccp" ${src.provider === "ccp" ? "selected" : ""}>CCP</option>
+                  <option value="vonage" ${src.provider === "vonage" ? "selected" : ""}>Vonage</option>
+                </select>
+                <span style="flex: 2; color: var(--text-secondary); font-size: 13px;">→ entry number</span>
+                <button type="button" class="btn btn-sm btn-ghost parallel-source-remove" title="Remove">&times;</button>
+              </div>
+            `).join("")}
+          </div>
+          <button type="button" class="btn btn-sm btn-secondary" id="parallel-source-add">+ Add Call Source</button>
+        </div>
+
+        <div class="toggle-row" style="margin-top: 12px;">
+          <div>
+            <div class="tr-label">Verify Agentforce Supervisor Tab</div>
+            <div class="tr-desc">Open Command Center → Agentforce tab and verify active conversation count</div>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="verify-agentforce-tab" ${a.verifyAgentforceTab ? "checked" : ""} />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="indent-group ${a.verifyAgentforceTab ? "" : "hidden"}" id="agentforce-verify-fields">
+          <div class="form-group" style="display: flex; gap: 16px;">
+            <div>
+              <label class="form-label">Expected Active Conversations</label>
+              <input class="form-input" id="parallel-expected-count" type="number" min="1" max="50"
+                     value="${a.parallelExpectedCount}" style="width: 80px;" />
+            </div>
+            <div>
+              <label class="form-label">Observation Timeout (sec)</label>
+              <input class="form-input" id="agentforce-observation-timeout" type="number" min="30" max="300"
+                     value="${a.agentforceObservationTimeoutSec}" style="width: 80px;" />
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="prompt-verify-fields" class="${showPromptFields ? "" : "hidden"}">
       </div>
 
@@ -941,7 +1131,52 @@ function renderCallStep() {
 }
 
 function bindCallOutcomeCards() {
-  // Call outcome card toggling — show/hide voicemail, callback, closed hours fields
+  // Call mode card toggling — show/hide NL Caller config
+  const callModeCards = document.querySelectorAll('[data-name="call-mode"] .option-card');
+  callModeCards.forEach((card) => {
+    card.addEventListener("click", () => {
+      const mode = card.dataset.value;
+      const nlConfig = document.getElementById("nl-caller-config");
+      if (nlConfig) nlConfig.style.display = mode === "nl_caller" ? "block" : "none";
+    });
+  });
+
+  // NL Caller mode toggle (gemini vs scripted)
+  const nlModeCards = document.querySelectorAll('[data-name="nl-caller-mode"] .option-card');
+  nlModeCards.forEach((card) => {
+    card.addEventListener("click", () => {
+      const nlMode = card.dataset.value;
+      const persona = document.getElementById("nl-caller-persona");
+      const scripted = document.getElementById("nl-caller-scripted");
+      if (persona) persona.style.display = nlMode === "scripted" ? "none" : "block";
+      if (scripted) scripted.style.display = nlMode === "scripted" ? "block" : "none";
+    });
+  });
+
+  // NL Caller scripted step add/remove
+  const addStepBtn = document.getElementById("nl-script-add-step");
+  if (addStepBtn) {
+    addStepBtn.addEventListener("click", () => {
+      const container = document.getElementById("nl-script-steps");
+      if (!container) return;
+      const step = document.createElement("div");
+      step.className = "nl-script-step";
+      step.style.cssText = "display: flex; gap: 8px; margin-bottom: 8px; align-items: center;";
+      step.innerHTML = `
+        <input type="text" class="form-input nl-script-keywords" value="" placeholder="Keywords (comma-separated)" style="flex: 1;" />
+        <input type="text" class="form-input nl-script-say" value="" placeholder="Caller says..." style="flex: 2;" />
+        <button type="button" class="btn btn-sm btn-ghost nl-script-remove" title="Remove">&times;</button>
+      `;
+      container.appendChild(step);
+    });
+  }
+  document.addEventListener("click", (e) => {
+    if (e.target.classList.contains("nl-script-remove")) {
+      e.target.closest(".nl-script-step")?.remove();
+    }
+  });
+
+  // Call outcome card toggling — show/hide voicemail, callback, closed hours, dial-only fields
   const outcomeCards = document.querySelectorAll('[data-name="call-outcome"] .option-card');
   outcomeCards.forEach((card) => {
     card.addEventListener("click", () => {
@@ -949,7 +1184,8 @@ function bindCallOutcomeCards() {
       document.getElementById("voicemail-fields").classList.toggle("hidden", outcome !== "voicemail");
       document.getElementById("callback-fields").classList.toggle("hidden", outcome !== "callback");
       document.getElementById("closed-hours-fields").classList.toggle("hidden", outcome !== "closed_hours");
-      document.getElementById("prompt-verify-fields").classList.toggle("hidden", outcome === "agent_answer");
+      document.getElementById("dial-only-fields").classList.toggle("hidden", outcome !== "dial_only");
+      document.getElementById("prompt-verify-fields").classList.toggle("hidden", outcome === "agent_answer" || outcome === "dial_only");
     });
   });
 
@@ -959,6 +1195,42 @@ function bindCallOutcomeCards() {
     greetingToggle.addEventListener("change", () => {
       const field = document.getElementById("greeting-text-field");
       if (field) field.classList.toggle("hidden", !greetingToggle.checked);
+    });
+  }
+
+  // Parallel call source add/remove
+  const addSourceBtn = document.getElementById("parallel-source-add");
+  if (addSourceBtn) {
+    addSourceBtn.addEventListener("click", () => {
+      const container = document.getElementById("parallel-call-sources");
+      if (!container) return;
+      const row = document.createElement("div");
+      row.className = "parallel-source-row";
+      row.style.cssText = "display: flex; gap: 8px; margin-bottom: 8px; align-items: center;";
+      row.innerHTML = `
+        <select class="form-input parallel-source-provider" style="flex: 1;">
+          <option value="twilio" selected>Twilio</option>
+          <option value="ccp">CCP</option>
+          <option value="vonage">Vonage</option>
+        </select>
+        <span style="flex: 2; color: var(--text-secondary); font-size: 13px;">→ entry number</span>
+        <button type="button" class="btn btn-sm btn-ghost parallel-source-remove" title="Remove">&times;</button>
+      `;
+      container.appendChild(row);
+    });
+  }
+  document.addEventListener("click", (e) => {
+    if (e.target.classList.contains("parallel-source-remove")) {
+      e.target.closest(".parallel-source-row")?.remove();
+    }
+  });
+
+  // Verify Agentforce tab toggle
+  const agentforceToggle = document.getElementById("verify-agentforce-tab");
+  if (agentforceToggle) {
+    agentforceToggle.addEventListener("change", () => {
+      const fields = document.getElementById("agentforce-verify-fields");
+      if (fields) fields.classList.toggle("hidden", !agentforceToggle.checked);
     });
   }
 }
@@ -1280,7 +1552,9 @@ function scenarioToNaturalLanguage(scenario) {
   }
 
   // No-agent behavior context
-  if (ct.noAgentBehavior === "voicemail") {
+  if (ct.expectation === "dial_only") {
+    lines.push(`And the call is expected to connect to an AI agent (Agentforce)`);
+  } else if (ct.noAgentBehavior === "voicemail") {
     lines.push(`And no agent is available to take the call`);
   } else if (ct.noAgentBehavior === "callback") {
     lines.push(`And the queue is full — no agent available`);
@@ -1437,6 +1711,23 @@ function scenarioToNaturalLanguage(scenario) {
         break;
       case "sf.attendance.psr_created":
         lines.push(`And a PendingServiceRouting record should be created`);
+        break;
+      // Dial-only (AI Agent) assertions
+      case "e2e.ccp_call_connected":
+        lines.push(`Then the CCP call should connect successfully`);
+        break;
+      case "e2e.agentforce_greeting_heard":
+        lines.push(`And the AI agent's greeting should be heard and transcribed`);
+        break;
+      case "e2e.greeting_matches_expected":
+        lines.push(`And the greeting should contain keywords: "${e.keywords || ""}"`);
+        break;
+      // Parallel Agentforce assertions
+      case "e2e.parallel_call_connected":
+        lines.push(`And parallel call #${(e.index ?? 0) + 1} (${e.provider || "unknown"}) should connect successfully`);
+        break;
+      case "e2e.agentforce_active_count":
+        lines.push(`And the Agentforce supervisor tab should show ${e.expectedCount || "N"} active conversations`);
         break;
       // Business hours / voicemail / callback assertions
       case "e2e.call_disconnected_by_system":
@@ -2201,8 +2492,23 @@ function answersToScenario() {
     callTrigger.ivrDigits = "";
   }
 
-  // Call outcome: closed hours
-  if (a.callOutcome === "closed_hours") {
+  // Call outcome: dial_only / parallel_agentforce (AI Agent / Agentforce)
+  if (a.callOutcome === "dial_only") {
+    const hasParallelSources = (a.parallelCallSources || []).length > 0;
+    callTrigger.expectation = hasParallelSources ? "parallel_agentforce" : "dial_only";
+    callTrigger.dialOnlyListenSec = a.dialOnlyListenSec || 15;
+    if (a.dialOnlyExpectedGreeting) callTrigger.dialOnlyExpectedGreeting = a.dialOnlyExpectedGreeting;
+    callTrigger.dialOnlySaveRecording = a.dialOnlySaveRecording !== false;
+    // Parallel call sources
+    if (hasParallelSources) {
+      callTrigger.parallelCallSources = a.parallelCallSources;
+    }
+    if (a.verifyAgentforceTab) {
+      callTrigger.verifyAgentforceTab = true;
+      callTrigger.parallelExpectedCount = a.parallelExpectedCount || 2;
+      callTrigger.agentforceObservationTimeoutSec = a.agentforceObservationTimeoutSec || 120;
+    }
+  } else if (a.callOutcome === "closed_hours") {
     callTrigger.callTiming = { window: "after_hours" };
     callTrigger.noAgentBehavior = "prompt_and_disconnect";
   } else if (a.callOutcome === "voicemail") {
@@ -2232,6 +2538,30 @@ function answersToScenario() {
   }
 
   scenario.callTrigger = callTrigger;
+
+  // NL Caller configuration
+  if (a.callMode === "nl_caller") {
+    const nlCaller = {
+      conversationMode: a.nlCallerMode || "gemini",
+      maxTurns: a.nlMaxTurns || 15,
+      turnTimeoutSec: a.nlTurnTimeout || 30,
+    };
+    if (a.nlCallerMode !== "scripted") {
+      nlCaller.persona = {
+        name: a.nlPersonaName || "",
+        accountNumber: a.nlPersonaAccount || "",
+        context: a.nlPersonaContext || "",
+        objective: a.nlPersonaObjective || "",
+      };
+    }
+    if (a.nlCallerMode === "scripted" && a.nlScriptSteps?.length > 0) {
+      nlCaller.conversation = a.nlScriptSteps.map((s) => ({
+        detectKeywords: s.keywords ? s.keywords.split(",").map((k) => k.trim()).filter(Boolean) : [],
+        say: s.say || "",
+      }));
+    }
+    scenario.nlCaller = nlCaller;
+  }
 
   // If custom steps from advanced editor, use those directly
   if (a.customSteps) {
@@ -2266,6 +2596,10 @@ function answersToScenario() {
     steps.push(cbStep);
     steps.push({ action: "listen_for_prompt", promptText: "we will call you back", listenTimeoutSec: 10 });
     steps.push({ action: "wait_for_disconnect", timeoutSec: 15 });
+    scenario.steps = steps;
+  } else if (a.callOutcome === "dial_only") {
+    // ── Dial-only (AI Agent / Agentforce) scenario steps ──
+    const steps = [{ action: "trigger_call" }];
     scenario.steps = steps;
   } else {
     // ── Agent answer scenario steps (existing) ──
@@ -2411,6 +2745,23 @@ function answersToScenario() {
         expect.push({ type: "e2e.acw_completed", equals: true });
       }
     }
+  } else if (a.callOutcome === "dial_only") {
+    expect.push({ type: "e2e.ccp_call_connected", equals: true });
+    // Parallel call source assertions
+    const sources = a.parallelCallSources || [];
+    for (let i = 0; i < sources.length; i++) {
+      expect.push({ type: "e2e.parallel_call_connected", provider: sources[i].provider, index: i });
+    }
+    if (sources.length === 0) {
+      // Single call: verify greeting
+      expect.push({ type: "e2e.agentforce_greeting_heard", equals: true });
+      if (a.dialOnlyExpectedGreeting) {
+        expect.push({ type: "e2e.greeting_matches_expected", keywords: a.dialOnlyExpectedGreeting });
+      }
+    }
+    if (a.verifyAgentforceTab) {
+      expect.push({ type: "e2e.agentforce_active_count", expectedCount: a.parallelExpectedCount || (1 + sources.length) });
+    }
   } else if (a.callOutcome === "closed_hours") {
     if (a.closedMessageText) {
       expect.push({ type: "e2e.prompt_played", contains: a.closedMessageText, equals: true });
@@ -2460,7 +2811,19 @@ function buildAutoDescription() {
   const parts = [];
 
   // Call outcome prefix
-  if (a.callOutcome === "closed_hours") {
+  if (a.callOutcome === "dial_only") {
+    const sources = a.parallelCallSources || [];
+    if (sources.length > 0) {
+      const totalCalls = 1 + sources.length;
+      const providers = ["CCP", ...sources.map(s => s.provider.charAt(0).toUpperCase() + s.provider.slice(1))];
+      parts.push(`AI Agent parallel test — ${totalCalls} calls (${providers.join(" + ")})`);
+      if (a.verifyAgentforceTab) parts.push("verify Agentforce tab");
+    } else {
+      parts.push("AI Agent connectivity test");
+      parts.push("verifies Agentforce greeting");
+    }
+    return parts.join(" — ");
+  } else if (a.callOutcome === "closed_hours") {
     parts.push("After-hours call");
     if (a.closedMessageText) parts.push(`plays "${a.closedMessageText}" and disconnects`);
     return parts.join(" — ") || "Call outside business hours — system plays closed message";
@@ -3018,6 +3381,20 @@ function handleRunEvent(data) {
 
 function parseScenarioLine(text) {
   // Match patterns from run-instance-e2e-suite.mjs output
+  // "- 1/1 ivr-support-queue-branch: started"
+  const startMatch = text.match(/^-\s+\d+\/\d+\s+(\S+):\s*started/);
+  if (startMatch) return { id: startMatch[1], status: "running" };
+
+  // "  ivr-support-queue-branch: passed"
+  const resultMatch = text.match(/^\s+(\S+):\s+(passed|failed|allowed_failure|dry_run|skipped)/);
+  if (resultMatch) {
+    const id = resultMatch[1];
+    const raw = resultMatch[2];
+    const status = raw === "allowed_failure" ? "passed" : raw === "dry_run" ? "skipped" : raw;
+    return { id, status };
+  }
+
+  // Legacy format fallback
   const runMatch = text.match(/Running scenario (\d+)\/\d+:\s+(\S+)/);
   if (runMatch) return { id: runMatch[2], status: "running" };
 
@@ -3734,6 +4111,12 @@ function openConnectionsModal() {
 function authStatusBadge(profile) {
   const status = profile._authStatus || "missing";
   const backend = profile._authBackend || "env";
+  if (status === "oauth-connected") {
+    return `<span class="auth-badge auth-ok">OAuth Connected</span>`;
+  }
+  if (status === "oauth-configured") {
+    return `<span class="auth-badge auth-warn">OAuth — Click Connect</span>`;
+  }
   if (status === "configured") {
     return `<span class="auth-badge auth-ok">${backend === "vault" ? "Vault" : "Configured"}</span>`;
   }
@@ -3814,9 +4197,11 @@ async function openConnectionForm(existing) {
   // Load existing .env values if editing
   let envData = null;
   let currentBackend = "env";
+  let currentSfAuthMethod = "password";
   if (isEdit) {
     envData = await api(`/profile/env?id=${encodeURIComponent(existing.id)}`);
     if (envData?.backend) currentBackend = envData.backend;
+    if (envData?.env?.SF_AUTH_METHOD) currentSfAuthMethod = envData.env.SF_AUTH_METHOD;
   }
   const env = envData?.env || {};
 
@@ -3840,9 +4225,15 @@ async function openConnectionForm(existing) {
         <option value="https://test.salesforce.com"${existing?.salesforce?.loginUrl === "https://test.salesforce.com" ? " selected" : ""}>test.salesforce.com (Sandbox)</option>
       </select>
     </div>
-    <div class="form-group">
-      <label class="form-label">SF App Name</label>
-      <input type="text" class="form-input" id="modal-conn-sf-app" value="${esc(existing?.salesforce?.appName || "Service Console")}" />
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">SF App Name</label>
+        <input type="text" class="form-input" id="modal-conn-sf-app" value="${esc(existing?.salesforce?.appName || "Service Console")}" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">SF Instance URL <span class="optional">(auto-detected after first login)</span></label>
+        <input type="text" class="form-input" id="modal-conn-sf-instance-url" value="${esc(env.SF_INSTANCE_URL || "")}" placeholder="https://myorg.lightning.force.com" />
+      </div>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -3855,7 +4246,14 @@ async function openConnectionForm(existing) {
       </div>
     </div>
 
-    <hr class="form-divider" />
+    <!-- Connection form tabs -->
+    <div class="conn-tab-bar">
+      <button class="conn-tab-btn active" data-conn-tab="credentials">Connection</button>
+      <button class="conn-tab-btn" data-conn-tab="api-keys">API Keys</button>
+    </div>
+
+    <!-- Tab 1: Connection (credentials) -->
+    <div class="conn-tab-panel" id="conn-tab-credentials">
 
     <div class="form-group">
       <label class="form-label">Secrets Backend</label>
@@ -3877,23 +4275,281 @@ async function openConnectionForm(existing) {
       Credentials will be stored in plaintext on disk. Use Vault for shared or production environments.
     </div>
 
-    <!-- env mode fields -->
-    <div id="cred-env-fields" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
-      <h4 class="cred-section-title">Salesforce Credentials</h4>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">SF Username</label>
-          <input type="text" class="form-input" id="modal-cred-sf-user" value="${esc(env.SF_USERNAME || "")}" placeholder="admin@myorg.com" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">SF Password</label>
-          <div class="password-field">
-            <input type="password" class="form-input" id="modal-cred-sf-pass" value="${esc(env.SF_PASSWORD || "")}" placeholder="Password" />
-            <button type="button" class="pw-toggle" data-target="modal-cred-sf-pass" title="Show/hide">&#x1F441;</button>
+    <div class="form-group">
+      <label class="form-label">Salesforce Auth Method</label>
+      <div class="backend-toggle">
+        <label class="backend-option">
+          <input type="radio" name="sf-auth-method" value="password" ${currentSfAuthMethod !== "oauth" ? "checked" : ""} />
+          <span class="backend-label">Username / Password</span>
+          <span class="backend-desc">Browser login with credentials</span>
+        </label>
+        <label class="backend-option">
+          <input type="radio" name="sf-auth-method" value="oauth" ${currentSfAuthMethod === "oauth" ? "checked" : ""} />
+          <span class="backend-label">Connected App OAuth</span>
+          <span class="backend-desc">No password sharing — user approves via Salesforce</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- OAuth mode fields -->
+    <div id="cred-oauth-fields" ${currentSfAuthMethod !== "oauth" ? 'style="display:none"' : ""}>
+      <p class="cred-hint">Click below to connect. You'll log in on Salesforce's website and authorize Audrique to access your org. No passwords are shared.</p>
+      <div class="form-group">
+        <button class="btn btn-primary" id="modal-oauth-connect-btn" type="button">Connect to Salesforce</button>
+        <span id="oauth-status-msg" style="margin-left: 12px; font-size: 0.85rem;"></span>
+      </div>
+    </div>
+
+    <!-- Password mode SF credentials (hidden when OAuth selected) -->
+    <div id="cred-password-sf-section" ${currentSfAuthMethod === "oauth" ? 'style="display:none"' : ""}>
+      <!-- env mode SF fields -->
+      <div id="cred-env-sf-fields" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
+        <h4 class="cred-section-title">Salesforce Credentials</h4>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">SF Username</label>
+            <input type="text" class="form-input" id="modal-cred-sf-user" value="${esc(env.SF_USERNAME || "")}" placeholder="admin@myorg.com" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">SF Password</label>
+            <div class="password-field">
+              <input type="password" class="form-input" id="modal-cred-sf-pass" value="${esc(env.SF_PASSWORD || "")}" placeholder="Password" />
+              <button type="button" class="pw-toggle" data-target="modal-cred-sf-pass" title="Show/hide">&#x1F441;</button>
+            </div>
           </div>
         </div>
       </div>
+      <!-- vault mode SF: actual values (when base path set) -->
+      <div id="cred-vault-sf-vals" style="display:none">
+        <h4 class="cred-section-title">Salesforce Credentials <span class="optional" id="vault-path-hint-sf"></span></h4>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">SF Username</label>
+            <input type="text" class="form-input" id="modal-vault-val-sf-user" placeholder="admin@myorg.com" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">SF Password</label>
+            <div class="password-field">
+              <input type="password" class="form-input" id="modal-vault-val-sf-pass" placeholder="Password" />
+              <button type="button" class="pw-toggle" data-target="modal-vault-val-sf-pass" title="Show/hide">&#x1F441;</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- vault mode SF: ref paths (when no base path — advanced) -->
+      <div id="cred-vault-sf-refs" ${currentBackend !== "vault" ? 'style="display:none"' : ""}>
+        <h4 class="cred-section-title">Salesforce Secret References</h4>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">SF Username Ref</label>
+            <input type="text" class="form-input vault-ref" id="modal-vault-sf-user" value="${esc(env.SF_USERNAME_REF || "")}" placeholder="kv/data/org#sf_username" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">SF Password Ref</label>
+            <input type="text" class="form-input vault-ref" id="modal-vault-sf-pass" value="${esc(env.SF_PASSWORD_REF || "")}" placeholder="kv/data/org#sf_password" />
+          </div>
+        </div>
+      </div>
+    </div>
 
+    <!-- OAuth + Vault: actual values (when base path set) -->
+    <div id="cred-oauth-vault-vals" style="display:none">
+      <h4 class="cred-section-title">OAuth Credentials <span class="optional" id="vault-path-hint-sf-oauth"></span></h4>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Consumer Key</label>
+          <div class="password-field">
+            <input type="password" class="form-input" id="modal-vault-val-oauth-key" placeholder="3MVG9..." />
+            <button type="button" class="pw-toggle" data-target="modal-vault-val-oauth-key" title="Show/hide">&#x1F441;</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Consumer Secret</label>
+          <div class="password-field">
+            <input type="password" class="form-input" id="modal-vault-val-oauth-secret" placeholder="Secret (optional with PKCE)" />
+            <button type="button" class="pw-toggle" data-target="modal-vault-val-oauth-secret" title="Show/hide">&#x1F441;</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- OAuth + Vault: ref paths (when no base path — advanced) -->
+    <div id="cred-oauth-vault-refs" ${currentSfAuthMethod !== "oauth" || currentBackend !== "vault" ? 'style="display:none"' : ""}>
+      <h4 class="cred-section-title">OAuth Secret References</h4>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Consumer Key Ref</label>
+          <input type="text" class="form-input vault-ref" id="modal-vault-oauth-key" value="${esc(env.SF_OAUTH_CONSUMER_KEY_REF || "")}" placeholder="kv/data/org#consumer_key" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Consumer Secret Ref</label>
+          <input type="text" class="form-input vault-ref" id="modal-vault-oauth-secret" value="${esc(env.SF_OAUTH_CONSUMER_SECRET_REF || "")}" placeholder="kv/data/org#consumer_secret" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Vault configuration (always available when vault backend selected) -->
+    <div id="cred-vault-fields" ${currentBackend !== "vault" ? 'style="display:none"' : ""}>
+      <h4 class="cred-section-title">Vault Configuration</h4>
+      <div class="form-group">
+        <label class="form-label">Vault Address</label>
+        <input type="text" class="form-input" id="modal-vault-addr" value="${esc(env.VAULT_ADDR || "")}" placeholder="https://vault.internal:8200" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Vault Token</label>
+        <div class="password-field">
+          <input type="password" class="form-input" id="modal-vault-token" value="${esc(env.VAULT_TOKEN || "")}" placeholder="hvs.xxxxx" />
+          <button type="button" class="pw-toggle" data-target="modal-vault-token" title="Show/hide">&#x1F441;</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Vault Base Path <span class="optional">(secrets stored at this path)</span></label>
+        <input type="text" class="form-input" id="modal-vault-base" value="${esc(existing?.vault?.basePath || "")}" placeholder="secret/data/voice/my-org" />
+      </div>
+      <div class="vault-test-row">
+        <button class="btn btn-outline btn-sm" id="modal-vault-test-btn">Test Vault Connection</button>
+        <span id="vault-test-result"></span>
+      </div>
+
+      <p class="cred-hint" id="vault-value-mode-info" style="display:none">Secrets will be written directly to Vault on save. Only references are stored in .env.</p>
+
+      <!-- Value mode: Connect Federation API (when base path set) -->
+      <div id="cred-vault-aws-vals" style="display:none">
+        <h4 class="cred-section-title">Connect Federation API <span class="optional" id="vault-path-hint-aws"></span></h4>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">AWS Access Key ID</label>
+            <div class="password-field">
+              <input type="password" class="form-input" id="modal-vault-val-aws-access-key" placeholder="AKIA..." />
+              <button type="button" class="pw-toggle" data-target="modal-vault-val-aws-access-key" title="Show/hide">&#x1F441;</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">AWS Secret Access Key</label>
+            <div class="password-field">
+              <input type="password" class="form-input" id="modal-vault-val-aws-secret-key" placeholder="Secret key" />
+              <button type="button" class="pw-toggle" data-target="modal-vault-val-aws-secret-key" title="Show/hide">&#x1F441;</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Connect Instance ID</label>
+          <input type="text" class="form-input" id="modal-vault-val-connect-instance-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+        </div>
+
+        <details class="cred-collapsible">
+          <summary class="cred-section-title">Legacy AWS Login (optional)</summary>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">AWS Username</label>
+              <input type="text" class="form-input" id="modal-vault-val-aws-user" placeholder="Username" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">AWS Password</label>
+              <div class="password-field">
+                <input type="password" class="form-input" id="modal-vault-val-aws-pass" placeholder="Password" />
+                <button type="button" class="pw-toggle" data-target="modal-vault-val-aws-pass" title="Show/hide">&#x1F441;</button>
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">AWS Account ID</label>
+            <input type="text" class="form-input" id="modal-vault-val-aws-account" placeholder="123456789012" />
+          </div>
+        </details>
+
+        <details class="cred-collapsible">
+          <summary class="cred-section-title">Twilio (optional)</summary>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Account SID</label>
+              <input type="text" class="form-input" id="modal-vault-val-twilio-sid" placeholder="AC..." />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Auth Token</label>
+              <div class="password-field">
+                <input type="password" class="form-input" id="modal-vault-val-twilio-token" placeholder="Auth token" />
+                <button type="button" class="pw-toggle" data-target="modal-vault-val-twilio-token" title="Show/hide">&#x1F441;</button>
+              </div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">From Number</label>
+              <input type="text" class="form-input" id="modal-vault-val-twilio-from" value="${esc(env.TWILIO_FROM_NUMBER || "")}" placeholder="+1234567890" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Connect Entrypoint</label>
+              <input type="text" class="form-input" id="modal-vault-val-connect-entry" value="${esc(env.CONNECT_ENTRYPOINT_NUMBER || "")}" placeholder="+1234567890" />
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- Ref mode: Connect Federation API (when no base path — advanced) -->
+      <div id="cred-vault-aws-refs">
+        <h4 class="cred-section-title">Connect Federation API References</h4>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">AWS Access Key ID Ref</label>
+            <input type="text" class="form-input vault-ref" id="modal-vault-aws-access-key" value="${esc(env.AWS_ACCESS_KEY_ID_REF || "")}" placeholder="kv/data/org#access_key_id" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">AWS Secret Access Key Ref</label>
+            <input type="text" class="form-input vault-ref" id="modal-vault-aws-secret-key" value="${esc(env.AWS_SECRET_ACCESS_KEY_REF || "")}" placeholder="kv/data/org#secret_access_key" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Connect Instance ID Ref</label>
+          <input type="text" class="form-input vault-ref" id="modal-vault-connect-instance-id" value="${esc(env.CONNECT_INSTANCE_ID_REF || "")}" placeholder="kv/data/org#connect_instance_id" />
+        </div>
+
+        <details class="cred-collapsible">
+          <summary class="cred-section-title">Legacy AWS Login Refs (optional)</summary>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">AWS Username Ref</label>
+              <input type="text" class="form-input vault-ref" id="modal-vault-aws-user" value="${esc(env.AWS_USERNAME_REF || "")}" placeholder="kv/data/org#aws_username" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">AWS Password Ref</label>
+              <input type="text" class="form-input vault-ref" id="modal-vault-aws-pass" value="${esc(env.AWS_PASSWORD_REF || "")}" placeholder="kv/data/org#aws_password" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">AWS Account ID Ref</label>
+            <input type="text" class="form-input vault-ref" id="modal-vault-aws-account" value="${esc(env.AWS_ACCOUNT_ID_REF || "")}" placeholder="kv/data/org#aws_account_id" />
+          </div>
+        </details>
+
+        <details class="cred-collapsible">
+          <summary class="cred-section-title">Twilio Refs (optional)</summary>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Account SID Ref</label>
+              <input type="text" class="form-input vault-ref" id="modal-vault-twilio-sid" value="${esc(env.TWILIO_ACCOUNT_SID_REF || "")}" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Auth Token Ref</label>
+              <input type="text" class="form-input vault-ref" id="modal-vault-twilio-token" value="${esc(env.TWILIO_AUTH_TOKEN_REF || "")}" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">From Number</label>
+              <input type="text" class="form-input" id="modal-vault-twilio-from" value="${esc(env.TWILIO_FROM_NUMBER || "")}" placeholder="+1234567890" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Connect Entrypoint</label>
+              <input type="text" class="form-input" id="modal-vault-connect-entry" value="${esc(env.CONNECT_ENTRYPOINT_NUMBER || "")}" placeholder="+1234567890" />
+            </div>
+          </div>
+        </details>
+      </div>
+
+    </div>
+
+    <!-- env mode: AWS + Twilio direct credentials -->
+    <div id="cred-env-fields" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
       <h4 class="cred-section-title">AWS / Amazon Connect</h4>
       <div class="form-row">
         <div class="form-group">
@@ -3939,81 +4595,50 @@ async function openConnectionForm(existing) {
           </div>
         </div>
       </details>
+
     </div>
 
-    <!-- vault mode fields -->
-    <div id="cred-vault-fields" ${currentBackend !== "vault" ? 'style="display:none"' : ""}>
-      <h4 class="cred-section-title">Vault Configuration</h4>
-      <div class="form-group">
-        <label class="form-label">Vault Address</label>
-        <input type="text" class="form-input" id="modal-vault-addr" value="${esc(env.VAULT_ADDR || "")}" placeholder="https://vault.internal:8200" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Vault Token</label>
-        <div class="password-field">
-          <input type="password" class="form-input" id="modal-vault-token" value="${esc(env.VAULT_TOKEN || "")}" placeholder="s.xxxxx" />
-          <button type="button" class="pw-toggle" data-target="modal-vault-token" title="Show/hide">&#x1F441;</button>
+    </div><!-- end conn-tab-credentials -->
+
+    <!-- Tab 2: API Keys -->
+    <div class="conn-tab-panel" id="conn-tab-api-keys" style="display:none;">
+      <p class="cred-hint">API keys for NL Caller (AI-to-AI voice testing). Keys are stored in your .env file (gitignored) or Vault — never committed to source control.</p>
+
+      <!-- Vault mode: actual value (when base path set) -->
+      <div id="api-keys-vault-vals" style="display:none">
+        <h4 class="cred-section-title">Gemini (Google AI) <span class="optional" id="vault-path-hint-gemini"></span></h4>
+        <div class="form-group">
+          <label class="form-label">Gemini API Key</label>
+          <div class="password-field">
+            <input type="password" class="form-input" id="modal-vault-val-gemini-key" placeholder="AIza..." />
+            <button type="button" class="pw-toggle" data-target="modal-vault-val-gemini-key" title="Show/hide">&#x1F441;</button>
+          </div>
         </div>
       </div>
-      <div class="form-group">
-        <label class="form-label">Base Path <span class="optional">(auto-populates refs below)</span></label>
-        <input type="text" class="form-input" id="modal-vault-base" value="" placeholder="kv/data/audrique/my-org" />
-      </div>
-      <div class="vault-test-row">
-        <button class="btn btn-outline btn-sm" id="modal-vault-test-btn">Test Vault Connection</button>
-        <span id="vault-test-result"></span>
+      <!-- Vault mode: ref path (when no base path — advanced) -->
+      <div id="api-keys-vault" ${currentBackend !== "vault" ? 'style="display:none"' : ""}>
+        <h4 class="cred-section-title">Gemini (Google AI)</h4>
+        <div class="form-group">
+          <label class="form-label">Gemini API Key Ref</label>
+          <input type="text" class="form-input vault-ref" id="modal-vault-gemini-key" value="${esc(env.GEMINI_API_KEY_REF || "")}" placeholder="kv/data/org#gemini_api_key" />
+        </div>
       </div>
 
-      <h4 class="cred-section-title">Secret References</h4>
-      <div class="form-row">
+      <!-- Env mode API keys -->
+      <div id="api-keys-env" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
+        <h4 class="cred-section-title">Gemini (Google AI)</h4>
         <div class="form-group">
-          <label class="form-label">SF Username Ref</label>
-          <input type="text" class="form-input vault-ref" id="modal-vault-sf-user" value="${esc(env.SF_USERNAME_REF || "")}" placeholder="kv/data/org#sf_username" />
+          <label class="form-label">Gemini API Key</label>
+          <div class="password-field">
+            <input type="password" class="form-input" id="modal-cred-gemini-key" value="${esc(env.GEMINI_API_KEY || "")}" placeholder="AIza..." />
+            <button type="button" class="pw-toggle" data-target="modal-cred-gemini-key" title="Show/hide">&#x1F441;</button>
+          </div>
         </div>
-        <div class="form-group">
-          <label class="form-label">SF Password Ref</label>
-          <input type="text" class="form-input vault-ref" id="modal-vault-sf-pass" value="${esc(env.SF_PASSWORD_REF || "")}" placeholder="kv/data/org#sf_password" />
+        <div class="cred-warning">
+          API keys are stored in your instance .env file which is gitignored. For shared environments, use Vault backend instead.
         </div>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">AWS Username Ref</label>
-          <input type="text" class="form-input vault-ref" id="modal-vault-aws-user" value="${esc(env.AWS_USERNAME_REF || "")}" placeholder="kv/data/org#aws_username" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">AWS Password Ref</label>
-          <input type="text" class="form-input vault-ref" id="modal-vault-aws-pass" value="${esc(env.AWS_PASSWORD_REF || "")}" placeholder="kv/data/org#aws_password" />
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">AWS Account ID Ref</label>
-        <input type="text" class="form-input vault-ref" id="modal-vault-aws-account" value="${esc(env.AWS_ACCOUNT_ID_REF || "")}" placeholder="kv/data/org#aws_account_id" />
-      </div>
-
-      <details class="cred-collapsible">
-        <summary class="cred-section-title">Twilio Refs (optional)</summary>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Account SID Ref</label>
-            <input type="text" class="form-input vault-ref" id="modal-vault-twilio-sid" value="${esc(env.TWILIO_ACCOUNT_SID_REF || "")}" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Auth Token Ref</label>
-            <input type="text" class="form-input vault-ref" id="modal-vault-twilio-token" value="${esc(env.TWILIO_AUTH_TOKEN_REF || "")}" />
-          </div>
-        </div>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">From Number</label>
-            <input type="text" class="form-input" id="modal-vault-twilio-from" value="${esc(env.TWILIO_FROM_NUMBER || "")}" placeholder="+1234567890" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Connect Entrypoint</label>
-            <input type="text" class="form-input" id="modal-vault-connect-entry" value="${esc(env.CONNECT_ENTRYPOINT_NUMBER || "")}" placeholder="+1234567890" />
-          </div>
-        </div>
-      </details>
-    </div>
+    </div><!-- end conn-tab-api-keys -->
   `;
 
   const footer = `
@@ -4022,15 +4647,91 @@ async function openConnectionForm(existing) {
   `;
   openModal(title, body, footer);
 
-  // Backend toggle handler
-  document.querySelectorAll('input[name="secrets-backend"]').forEach((radio) => {
-    radio.addEventListener("change", () => {
-      const isVault = radio.value === "vault";
-      document.getElementById("cred-env-fields").style.display = isVault ? "none" : "";
-      document.getElementById("cred-vault-fields").style.display = isVault ? "" : "none";
-      document.getElementById("cred-warning-env").style.display = isVault ? "none" : "";
+  // Tab switching for Connection / API Keys
+  document.querySelectorAll(".conn-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.connTab;
+      document.querySelectorAll(".conn-tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.connTab === tab));
+      document.getElementById("conn-tab-credentials").style.display = tab === "credentials" ? "" : "none";
+      document.getElementById("conn-tab-api-keys").style.display = tab === "api-keys" ? "" : "none";
     });
   });
+
+  // Unified toggle handler for both SF auth method and secrets backend
+  function updateCredentialVisibility() {
+    const isOAuth = document.querySelector('input[name="sf-auth-method"]:checked')?.value === "oauth";
+    const isVault = document.querySelector('input[name="secrets-backend"]:checked')?.value === "vault";
+
+    // OAuth vs Password SF fields
+    document.getElementById("cred-oauth-fields").style.display = isOAuth ? "" : "none";
+    document.getElementById("cred-password-sf-section").style.display = isOAuth ? "none" : "";
+
+    // OAuth + Vault: show value or ref inputs depending on base path
+    const hasBase = !!document.getElementById("modal-vault-base")?.value?.trim();
+    const oauthVaultVals = document.getElementById("cred-oauth-vault-vals");
+    if (oauthVaultVals) oauthVaultVals.style.display = (isOAuth && isVault && hasBase) ? "" : "none";
+    const oauthVaultRefs = document.getElementById("cred-oauth-vault-refs");
+    if (oauthVaultRefs) oauthVaultRefs.style.display = (isOAuth && isVault && !hasBase) ? "" : "none";
+
+    // Vault vs env sections
+    document.getElementById("cred-vault-fields").style.display = isVault ? "" : "none";
+    document.getElementById("cred-env-fields").style.display = isVault ? "none" : "";
+
+    // Vault value-mode vs ref-mode for AWS/Twilio
+    const vaultAwsVals = document.getElementById("cred-vault-aws-vals");
+    const vaultAwsRefs = document.getElementById("cred-vault-aws-refs");
+    if (vaultAwsVals) vaultAwsVals.style.display = (isVault && hasBase) ? "" : "none";
+    if (vaultAwsRefs) vaultAwsRefs.style.display = (isVault && !hasBase) ? "" : "none";
+
+    // Password + Vault: SF value or ref fields depending on base path
+    const vaultSfVals = document.getElementById("cred-vault-sf-vals");
+    if (vaultSfVals) vaultSfVals.style.display = (!isOAuth && isVault && hasBase) ? "" : "none";
+    const vaultSfRefs = document.getElementById("cred-vault-sf-refs");
+    if (vaultSfRefs) vaultSfRefs.style.display = (!isOAuth && isVault && !hasBase) ? "" : "none";
+    const envSfFields = document.getElementById("cred-env-sf-fields");
+    if (envSfFields) envSfFields.style.display = (!isOAuth && !isVault) ? "" : "none";
+
+    // Warning
+    const warningEl = document.getElementById("cred-warning-env");
+    if (warningEl) warningEl.style.display = isVault ? "none" : "";
+
+    // API Keys tab: show vault value/ref or env panel based on backend + base path
+    const apiKeysVaultVals = document.getElementById("api-keys-vault-vals");
+    const apiKeysVault = document.getElementById("api-keys-vault");
+    const apiKeysEnv = document.getElementById("api-keys-env");
+    if (apiKeysVaultVals) apiKeysVaultVals.style.display = (isVault && hasBase) ? "" : "none";
+    if (apiKeysVault) apiKeysVault.style.display = (isVault && !hasBase) ? "" : "none";
+    if (apiKeysEnv) apiKeysEnv.style.display = isVault ? "none" : "";
+  }
+
+  document.querySelectorAll('input[name="sf-auth-method"]').forEach((radio) => {
+    radio.addEventListener("change", updateCredentialVisibility);
+  });
+  document.querySelectorAll('input[name="secrets-backend"]').forEach((radio) => {
+    radio.addEventListener("change", updateCredentialVisibility);
+  });
+
+  // OAuth "Connect to Salesforce" button
+  const oauthConnectBtn = document.getElementById("modal-oauth-connect-btn");
+  if (oauthConnectBtn) {
+    oauthConnectBtn.addEventListener("click", () => startSfOauthFlow(isEdit ? existing.id : null));
+  }
+
+  // Listen for OAuth callback completion via postMessage
+  function onOAuthMessage(event) {
+    if (event.data?.type === "sf-oauth-complete") {
+      window.removeEventListener("message", onOAuthMessage);
+      const msgEl = document.getElementById("oauth-status-msg");
+      if (event.data.success) {
+        if (msgEl) { msgEl.textContent = "Connected!"; msgEl.style.color = "#34d399"; }
+        toast("Connected to Salesforce via OAuth!", "success");
+      } else {
+        if (msgEl) { msgEl.textContent = event.data.error || "Failed"; msgEl.style.color = "#f87171"; }
+        toast(`OAuth failed: ${event.data.error || "Unknown error"}`, "error");
+      }
+    }
+  }
+  window.addEventListener("message", onOAuthMessage);
 
   // Password reveal toggles
   document.querySelectorAll(".pw-toggle").forEach((btn) => {
@@ -4040,26 +4741,96 @@ async function openConnectionForm(existing) {
     });
   });
 
-  // Vault base path auto-populate
+  // Load masked secret presence from Vault when editing a profile with basePath
+  if (isEdit && existing?.id && existing?.vault?.basePath) {
+    api(`/vault/secrets?id=${encodeURIComponent(existing.id)}`).then((res) => {
+      if (!res.available || !res.secrets) return;
+      const fieldMap = {
+        sfUsername: "modal-vault-val-sf-user",
+        sfPassword: "modal-vault-val-sf-pass",
+        oauthConsumerKey: "modal-vault-val-oauth-key",
+        oauthConsumerSecret: "modal-vault-val-oauth-secret",
+        awsAccessKeyId: "modal-vault-val-aws-access-key",
+        awsSecretAccessKey: "modal-vault-val-aws-secret-key",
+        connectInstanceId: "modal-vault-val-connect-instance-id",
+        awsUsername: "modal-vault-val-aws-user",
+        awsPassword: "modal-vault-val-aws-pass",
+        awsAccountId: "modal-vault-val-aws-account",
+        twilioSid: "modal-vault-val-twilio-sid",
+        twilioToken: "modal-vault-val-twilio-token",
+        geminiApiKey: "modal-vault-val-gemini-key",
+      };
+      for (const [key, inputId] of Object.entries(fieldMap)) {
+        if (res.secrets[key]) {
+          const el = document.getElementById(inputId);
+          if (el) el.value = res.secrets[key];
+        }
+      }
+    }).catch(() => { /* Vault unreachable — leave fields empty */ });
+  }
+
+  // Vault base path — toggles between value mode and ref mode
   const baseInput = document.getElementById("modal-vault-base");
   if (baseInput) {
-    baseInput.addEventListener("input", () => {
+    function updateVaultMode() {
       const base = baseInput.value.trim();
-      if (!base) return;
-      const refFields = {
-        "modal-vault-sf-user": "sf_username",
-        "modal-vault-sf-pass": "sf_password",
-        "modal-vault-aws-user": "aws_username",
-        "modal-vault-aws-pass": "aws_password",
-        "modal-vault-aws-account": "aws_account_id",
-        "modal-vault-twilio-sid": "twilio_account_sid",
-        "modal-vault-twilio-token": "twilio_auth_token",
-      };
-      for (const [id, field] of Object.entries(refFields)) {
-        const el = document.getElementById(id);
-        if (el && !el.dataset.userEdited) el.value = `${base}#${field}`;
+      const hasBase = !!base;
+      const isOAuth = document.querySelector('input[name="sf-auth-method"]:checked')?.value === "oauth";
+
+      // Toggle value-mode vs ref-mode sections
+      const show = (id, visible) => { const el = document.getElementById(id); if (el) el.style.display = visible ? "" : "none"; };
+      show("vault-value-mode-info", hasBase);
+      show("cred-vault-sf-vals", hasBase && !isOAuth);
+      show("cred-vault-sf-refs", !hasBase && !isOAuth);
+      show("cred-oauth-vault-vals", hasBase && isOAuth);
+      show("cred-oauth-vault-refs", !hasBase && isOAuth);
+      show("cred-vault-aws-vals", hasBase);
+      show("cred-vault-aws-refs", !hasBase);
+      show("api-keys-vault-vals", hasBase);
+      show("api-keys-vault", !hasBase);
+
+      // Update path hints
+      if (hasBase) {
+        const hints = {
+          "vault-path-hint-sf": `${base}/salesforce`,
+          "vault-path-hint-sf-oauth": `${base}/salesforce`,
+          "vault-path-hint-aws": `${base}/aws`,
+          "vault-path-hint-gemini": `${base}/gemini`,
+        };
+        for (const [id, path] of Object.entries(hints)) {
+          const el = document.getElementById(id);
+          if (el) el.textContent = `\u2192 ${path}`;
+        }
       }
-    });
+
+      // Also auto-populate ref fields (for fallback/advanced mode)
+      if (hasBase) {
+        const groupedRefFields = {
+          "modal-vault-sf-user": "salesforce#username",
+          "modal-vault-sf-pass": "salesforce#password",
+          "modal-vault-oauth-key": "salesforce#consumer_key",
+          "modal-vault-oauth-secret": "salesforce#consumer_secret",
+          "modal-vault-aws-access-key": "aws#access_key_id",
+          "modal-vault-aws-secret-key": "aws#secret_access_key",
+          "modal-vault-connect-instance-id": "aws#connect_instance_id",
+          "modal-vault-aws-user": "aws#username",
+          "modal-vault-aws-pass": "aws#password",
+          "modal-vault-aws-account": "aws#account_id",
+          "modal-vault-twilio-sid": "twilio#account_sid",
+          "modal-vault-twilio-token": "twilio#auth_token",
+          "modal-vault-gemini-key": "gemini#api_key",
+        };
+        for (const [id, subField] of Object.entries(groupedRefFields)) {
+          const el = document.getElementById(id);
+          if (el && !el.dataset.userEdited) el.value = `${base}/${subField}`;
+        }
+      }
+    }
+
+    baseInput.addEventListener("input", updateVaultMode);
+    // Run once on load if base path is pre-populated
+    if (baseInput.value.trim()) setTimeout(updateVaultMode, 0);
+
     // Track manual edits to vault ref fields
     document.querySelectorAll(".vault-ref").forEach((input) => {
       input.addEventListener("input", () => { input.dataset.userEdited = "true"; });
@@ -4105,6 +4876,63 @@ async function openConnectionForm(existing) {
   if (!isEdit) document.getElementById("modal-conn-label").focus();
 }
 
+async function startSfOauthFlow(profileId) {
+  if (!profileId) {
+    toast("Save the connection first, then click Connect to Salesforce.", "error");
+    return;
+  }
+
+  const msgEl = document.getElementById("oauth-status-msg");
+
+  // Save the auth method to the profile env (preserve current backend selection)
+  if (msgEl) { msgEl.textContent = "Preparing..."; msgEl.style.color = "#94a3b8"; }
+  const currentBackend = document.querySelector('input[name="secrets-backend"]:checked')?.value || "env";
+  const saveCreds = { secretsBackend: currentBackend, sfAuthMethod: "oauth" };
+  // If vault mode, include the consumer key ref so it's available for OAuth
+  if (currentBackend === "vault") {
+    const keyRef = document.getElementById("modal-vault-oauth-key")?.value || "";
+    if (keyRef) saveCreds.oauthConsumerKeyRef = keyRef;
+    const secretRef = document.getElementById("modal-vault-oauth-secret")?.value || "";
+    if (secretRef) saveCreds.oauthConsumerSecretRef = secretRef;
+  }
+  await api("/profile/env", {
+    method: "POST",
+    body: JSON.stringify({
+      id: profileId,
+      credentials: saveCreds,
+    }),
+  });
+
+  // Get the authorize URL from the server
+  if (msgEl) { msgEl.textContent = "Opening Salesforce..."; msgEl.style.color = "#94a3b8"; }
+  const result = await api(`/oauth/sf/start?profileId=${encodeURIComponent(profileId)}`);
+  if (result.error) {
+    toast(result.error, "error");
+    if (msgEl) { msgEl.textContent = result.error; msgEl.style.color = "#f87171"; }
+    return;
+  }
+
+  // Open popup for SF login
+  const popup = window.open(result.url, "sf-oauth", "width=600,height=700,scrollbars=yes");
+  if (!popup) {
+    toast("Popup blocked. Please allow popups for this site.", "error");
+    if (msgEl) { msgEl.textContent = "Popup blocked"; msgEl.style.color = "#f87171"; }
+    return;
+  }
+  if (msgEl) { msgEl.textContent = "Waiting for authorization..."; msgEl.style.color = "#94a3b8"; }
+
+  // Poll for popup close (user cancelled) as a fallback
+  const closeCheck = setInterval(() => {
+    if (popup.closed) {
+      clearInterval(closeCheck);
+      const currentMsg = msgEl?.textContent || "";
+      if (!currentMsg.includes("Connected") && !currentMsg.includes("Failed")) {
+        if (msgEl) { msgEl.textContent = ""; }
+      }
+    }
+  }, 1000);
+}
+
 async function saveConnection(existingId) {
   const label = document.getElementById("modal-conn-label").value.trim();
   const customer = document.getElementById("modal-conn-customer").value.trim();
@@ -4118,11 +4946,15 @@ async function saveConnection(existingId) {
     return;
   }
 
+  // Determine SF auth method
+  const sfAuthMethod = document.querySelector('input[name="sf-auth-method"]:checked')?.value || "password";
+
   // Vault config goes to profiles.json (not .env) to avoid regulated mode violations
   const backend = document.querySelector('input[name="secrets-backend"]:checked')?.value || "env";
   const vaultPayload = backend === "vault" ? {
     addr: document.getElementById("modal-vault-addr")?.value?.trim() || "",
     token: document.getElementById("modal-vault-token")?.value?.trim() || "",
+    basePath: document.getElementById("modal-vault-base")?.value?.trim() || "",
   } : undefined;
 
   // Save profile metadata (including vault config)
@@ -4151,25 +4983,82 @@ async function saveConnection(existingId) {
   const profileId = existingId || profileRes.id;
   const val = (id) => document.getElementById(id)?.value?.trim() || "";
 
-  const credentials = { secretsBackend: backend };
+  const credentials = { secretsBackend: backend, sfAuthMethod };
+
+  // SF Instance URL (common to all modes)
+  credentials.sfInstanceUrl = val("modal-conn-sf-instance-url");
 
   if (backend === "vault") {
-    // Vault addr goes to .env for VAULT_ADDR (non-sensitive); token is in profiles.json only
     credentials.vaultAddr = val("modal-vault-addr");
-    credentials.sfUsernameRef = val("modal-vault-sf-user");
-    credentials.sfPasswordRef = val("modal-vault-sf-pass");
-    credentials.awsUsernameRef = val("modal-vault-aws-user");
-    credentials.awsPasswordRef = val("modal-vault-aws-pass");
-    credentials.awsAccountIdRef = val("modal-vault-aws-account");
-    credentials.twilioSidRef = val("modal-vault-twilio-sid");
-    credentials.twilioTokenRef = val("modal-vault-twilio-token");
-    credentials.twilioFromNumber = val("modal-vault-twilio-from");
-    credentials.connectEntrypoint = val("modal-vault-connect-entry");
+    const basePath = val("modal-vault-base");
+
+    if (basePath) {
+      // Value mode — send actual values; server writes to Vault
+      credentials._writeToVault = true;
+
+      if (sfAuthMethod === "oauth") {
+        const ck = val("modal-vault-val-oauth-key");
+        if (ck && !ck.startsWith("\u2022")) credentials.oauthConsumerKey = ck;
+        const cs = val("modal-vault-val-oauth-secret");
+        if (cs && !cs.startsWith("\u2022")) credentials.oauthConsumerSecret = cs;
+      } else {
+        credentials.sfUsername = val("modal-vault-val-sf-user");
+        const sfPass = val("modal-vault-val-sf-pass");
+        if (sfPass && !sfPass.startsWith("\u2022")) credentials.sfPassword = sfPass;
+      }
+
+      const akid = val("modal-vault-val-aws-access-key");
+      if (akid && !akid.startsWith("\u2022")) credentials.awsAccessKeyId = akid;
+      const asak = val("modal-vault-val-aws-secret-key");
+      if (asak && !asak.startsWith("\u2022")) credentials.awsSecretAccessKey = asak;
+      credentials.connectInstanceId = val("modal-vault-val-connect-instance-id");
+
+      // Legacy AWS login (optional)
+      credentials.awsUsername = val("modal-vault-val-aws-user");
+      const awsPass = val("modal-vault-val-aws-pass");
+      if (awsPass && !awsPass.startsWith("\u2022")) credentials.awsPassword = awsPass;
+      credentials.awsAccountId = val("modal-vault-val-aws-account");
+
+      // Twilio (optional)
+      credentials.twilioSid = val("modal-vault-val-twilio-sid");
+      const twilioToken = val("modal-vault-val-twilio-token");
+      if (twilioToken && !twilioToken.startsWith("\u2022")) credentials.twilioToken = twilioToken;
+      credentials.twilioFromNumber = val("modal-vault-val-twilio-from");
+      credentials.connectEntrypoint = val("modal-vault-val-connect-entry");
+
+      // AI Providers (NL Caller)
+      const geminiKey = val("modal-vault-val-gemini-key");
+      if (geminiKey && !geminiKey.startsWith("\u2022")) credentials.geminiApiKey = geminiKey;
+    } else {
+      // Ref mode — advanced: user types Vault path references manually
+      credentials.awsAccessKeyIdRef = val("modal-vault-aws-access-key");
+      credentials.awsSecretAccessKeyRef = val("modal-vault-aws-secret-key");
+      credentials.connectInstanceIdRef = val("modal-vault-connect-instance-id");
+
+      if (sfAuthMethod === "oauth") {
+        credentials.oauthConsumerKeyRef = val("modal-vault-oauth-key");
+        credentials.oauthConsumerSecretRef = val("modal-vault-oauth-secret");
+      } else {
+        credentials.sfUsernameRef = val("modal-vault-sf-user");
+        credentials.sfPasswordRef = val("modal-vault-sf-pass");
+      }
+
+      credentials.awsUsernameRef = val("modal-vault-aws-user");
+      credentials.awsPasswordRef = val("modal-vault-aws-pass");
+      credentials.awsAccountIdRef = val("modal-vault-aws-account");
+      credentials.twilioSidRef = val("modal-vault-twilio-sid");
+      credentials.twilioTokenRef = val("modal-vault-twilio-token");
+      credentials.twilioFromNumber = val("modal-vault-twilio-from");
+      credentials.connectEntrypoint = val("modal-vault-connect-entry");
+      credentials.geminiApiKeyRef = val("modal-vault-gemini-key");
+    }
   } else {
-    credentials.sfUsername = val("modal-cred-sf-user");
-    // Only send password if not masked placeholder
-    const sfPass = val("modal-cred-sf-pass");
-    if (sfPass && !sfPass.startsWith("\u2022")) credentials.sfPassword = sfPass;
+    // Direct env mode
+    if (sfAuthMethod !== "oauth") {
+      credentials.sfUsername = val("modal-cred-sf-user");
+      const sfPass = val("modal-cred-sf-pass");
+      if (sfPass && !sfPass.startsWith("\u2022")) credentials.sfPassword = sfPass;
+    }
     credentials.awsUsername = val("modal-cred-aws-user");
     const awsPass = val("modal-cred-aws-pass");
     if (awsPass && !awsPass.startsWith("\u2022")) credentials.awsPassword = awsPass;
@@ -4179,6 +5068,10 @@ async function saveConnection(existingId) {
     if (twilioToken && !twilioToken.startsWith("\u2022")) credentials.twilioToken = twilioToken;
     credentials.twilioFromNumber = val("modal-cred-twilio-from");
     credentials.connectEntrypoint = val("modal-cred-connect-entry");
+
+    // AI Provider keys (NL Caller)
+    const geminiKey = val("modal-cred-gemini-key");
+    if (geminiKey && !geminiKey.startsWith("\u2022")) credentials.geminiApiKey = geminiKey;
   }
 
   const envRes = await api("/profile/env", {
@@ -4187,9 +5080,12 @@ async function saveConnection(existingId) {
   });
 
   if (envRes.error) {
-    toast(`Profile saved but credentials failed: ${envRes.error}`, "error");
+    const detail = envRes.details ? `: ${envRes.details.join(", ")}` : "";
+    toast(`Profile saved but credentials failed: ${envRes.error}${detail}`, "error");
   } else {
-    toast(existingId ? "Connection updated" : `Connection "${label}" created`, "success");
+    let msg = existingId ? "Connection updated" : `Connection "${label}" created`;
+    if (envRes.vaultWritten?.length) msg += ` (secrets written to Vault: ${envRes.vaultWritten.join(", ")})`;
+    toast(msg, "success");
   }
 
   await loadProfiles();

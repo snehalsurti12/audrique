@@ -5,7 +5,7 @@
 [![Playwright](https://img.shields.io/badge/Playwright-powered-45ba4b.svg)](https://playwright.dev)
 [![Salesforce](https://img.shields.io/badge/Salesforce-SCV-00A1E0.svg)](https://www.salesforce.com/products/service-cloud-voice/)
 
-**Agentic AI-ready end-to-end testing framework for enterprise contact centers.** Autonomously orchestrates real voice calls, multi-browser CRM verification, and telephony API validation — all in a single declarative test scenario.
+**Agentic AI-ready end-to-end testing framework for enterprise contact centers.** Autonomously orchestratåes real voice calls, multi-browser CRM verification, and telephony API validation — all in a single declarative test scenario.
 
 > The first open-source tool that tests across telephony, CRM UI, and backend records simultaneously — no mocks, no stubs, real calls.
 
@@ -18,12 +18,23 @@
 
 ---
 
-## What's New in v0.4.0
+## What's New in v0.5.0
+
+- **Parallel Agentforce Testing** — Place multiple simultaneous calls from different telephony providers (CCP + Twilio) to test Salesforce Agentforce AI agent handling. Verify concurrent conversations in the Command Center supervisor Agentforce tab — all from a single declarative scenario.
+- **Twilio Inbound Dialer** — Direct Twilio REST API call placement as a parallel call source. No browser needed — calls are placed programmatically and verified alongside CCP calls.
+- **Agentforce Supervisor Observer** — New browser agent monitors the Command Center Agentforce tab, reading KPI cards and active conversation counts to verify AI agent load handling.
+- **UI-Driven Parallel Config** — Scenario Studio "AI Agent" call outcome lets you add multiple call sources (CCP, Twilio), enable Agentforce supervisor verification, and set expected conversation counts — no JSON editing required.
+- **Connect GetFederationToken Auth** — Zero-browser CCP authentication via AWS `GetFederationToken` API. Injects `lily-auth-*` cookies directly — no SAML, no password, ~2s per agent. Enables bulk agent pool auth for load testing.
+- **Demo Video Pipeline** — Automated FFmpeg-based demo video generation from test results with title cards, phase annotations, speed modulation, and multi-stream compositing.
+
+<details>
+<summary>v0.4.0 highlights</summary>
 
 - **Fully UI-Driven Configuration** — Removed all hardcoded org-specific values. CCP timeouts (5 settings), SF navigation timeouts (3 settings), and supervisor surface names are now configurable from Advanced Settings in Scenario Studio. Agent app name, supervisor app name, and queue names are set via Suite Settings vocabulary.
 - **Session Resilience** — HTTP liveness probes validate SF + Connect sessions before each suite run (not just file age checks). Stale Chromium processes are killed between scenarios to prevent "logged in from another location" conflicts. Session conflict banners are resolved via page reload instead of fragile button clicking.
 - **Two-Tab Supervisor Monitoring** — Supervisor observer opens a dedicated second tab for In-Progress Work, eliminating surface-switching delays and CTI adapter interference.
 - **Run from UI** — Select a suite in Scenario Studio and run directly from the browser. Auto-refreshes expired sessions, streams live output via SSE, and shows per-scenario status cards.
+</details>
 
 <details>
 <summary>v0.3.0 highlights</summary>
@@ -76,7 +87,8 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 
 | Capability | Description |
 |------------|-------------|
-| **Autonomous call orchestration** | Places real calls via Connect CCP (Twilio beta), navigates IVR menus with DTMF |
+| **Autonomous call orchestration** | Places real calls via Connect CCP or Twilio REST API, navigates IVR menus with DTMF |
+| **Parallel Agentforce testing** | Simultaneous multi-provider calls to validate AI agent concurrency and supervisor monitoring |
 | **Transcription-driven IVR** | Local whisper.cpp transcribes IVR prompts in ~2.5 s, matches keywords, sends DTMF on match — no timer guessing |
 | **Multi-agent browser verification** | 3 parallel Playwright sessions (Agent, CCP, Supervisor) |
 | **Declarative scenario DSL** | JSON-based scenarios — no code to write |
@@ -101,6 +113,7 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 | Callback | Queue-full handling, callback task created in Salesforce |
 | Real-time transcript | Speech captured, transcript panel updates live |
 | Hold / resume / ACW | Full call lifecycle with disposition |
+| Agentforce (AI agent) | Parallel calls from CCP + Twilio, AI greeting verification, supervisor active count |
 
 ## Architecture
 
@@ -488,6 +501,9 @@ audrique/
 │       ├── sfSupervisorObserver.ts  # Supervisor queue monitoring
 │       ├── sfOrgDiscovery.ts  # Auto-discovery via SOQL + DOM
 │       ├── connectCcpDialer.ts     # CCP softphone automation
+│       ├── parallelDialer.ts      # Multi-provider parallel call placement
+│       ├── sfAgentforceObserver.ts # Agentforce tab monitoring
+│       ├── twilioInbound.ts       # Twilio REST API inbound dialer
 │       ├── ivrSpeechDetector.ts   # Browser-side IVR speech/silence detection
 │       └── ivrWhisperTranscriber.ts # Local whisper.cpp transcription
 ├── scenarios/
@@ -516,7 +532,7 @@ audrique/
 
 **Current release** supports Salesforce Service Cloud Voice + Amazon Connect. The architecture is **platform-agnostic by design** — the declarative scenario DSL, browser automation, and evidence pipeline are CRM-independent. Adding a new platform requires only a new verifier package and browser adapter.
 
-### Current Support (v0.4)
+### Current Support (v0.5)
 
 | Component | Technology | Status |
 |-----------|------------|--------|

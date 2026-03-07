@@ -33,56 +33,97 @@ async function validateSessions() {
     process.env.CONNECT_STORAGE_STATE || ".auth/connect-ccp-personal.json"
   );
 
-  const errors = [];
+  let sfNeedsRefresh = false;
+  let connectNeedsRefresh = false;
 
-  // ── SF session: file + cookie + liveness ──
+  // ── SF session: file + cookie check ──
   let sfCookies = null;
   if (!fs.existsSync(sfStatePath)) {
-    errors.push(`Salesforce session file missing: ${sfStatePath}`);
+    console.log(`[session-check] SF session file missing. Will attempt auto-refresh.`);
+    sfNeedsRefresh = true;
   } else {
     const stat = fs.statSync(sfStatePath);
     const ageMin = Math.round((Date.now() - stat.mtimeMs) / 60000);
     if (ageMin > SESSION_MAX_AGE_MIN) {
-      errors.push(`Salesforce session expired: ${ageMin} min old (max ${SESSION_MAX_AGE_MIN} min). File: ${sfStatePath}`);
+      console.log(`[session-check] SF session expired (${ageMin} min old). Will attempt auto-refresh.`);
+      sfNeedsRefresh = true;
     } else {
       try {
         const data = JSON.parse(fs.readFileSync(sfStatePath, "utf8"));
         const cookies = Array.isArray(data) ? data : data?.cookies;
         const sid = cookies?.find(c => c.name === "sid");
         if (!sid?.value) {
-          errors.push(`Salesforce session file has no sid cookie: ${sfStatePath}`);
+          console.log(`[session-check] SF session file has no sid cookie. Will attempt auto-refresh.`);
+          sfNeedsRefresh = true;
         } else {
           sfCookies = cookies;
           console.log(`[session-check] SF session file: OK (${ageMin} min old)`);
         }
       } catch (e) {
-        errors.push(`Salesforce session file is corrupt: ${e.message}`);
+        console.log(`[session-check] SF session file is corrupt: ${e.message}. Will attempt auto-refresh.`);
+        sfNeedsRefresh = true;
       }
     }
   }
 
-  // ── Connect session: file + cookie + liveness ──
+  // ── Connect session: file + cookie check ──
   let connectCookies = null;
   if (!fs.existsSync(connectStatePath)) {
-    errors.push(`Connect CCP session file missing: ${connectStatePath}`);
+    console.log(`[session-check] Connect CCP session file missing. Will attempt auto-refresh.`);
+    connectNeedsRefresh = true;
   } else {
     const stat = fs.statSync(connectStatePath);
     const ageMin = Math.round((Date.now() - stat.mtimeMs) / 60000);
     if (ageMin > SESSION_MAX_AGE_MIN) {
-      errors.push(`Connect CCP session expired: ${ageMin} min old (max ${SESSION_MAX_AGE_MIN} min). File: ${connectStatePath}`);
+      console.log(`[session-check] Connect CCP session expired (${ageMin} min old). Will attempt auto-refresh.`);
+      connectNeedsRefresh = true;
     } else {
       try {
         const data = JSON.parse(fs.readFileSync(connectStatePath, "utf8"));
         const cookies = Array.isArray(data) ? data : data?.cookies;
         if (!cookies || cookies.length === 0) {
-          errors.push(`Connect CCP session file has no cookies: ${connectStatePath}`);
+          console.log(`[session-check] Connect CCP session file has no cookies. Will attempt auto-refresh.`);
+          connectNeedsRefresh = true;
         } else {
           connectCookies = cookies;
           console.log(`[session-check] Connect session file: OK (${ageMin} min old)`);
         }
       } catch (e) {
-        errors.push(`Connect CCP session file is corrupt: ${e.message}`);
+        console.log(`[session-check] Connect CCP session file is corrupt: ${e.message}. Will attempt auto-refresh.`);
+        connectNeedsRefresh = true;
       }
+    }
+  }
+
+  // ── Auto-refresh expired sessions ──
+  const refreshErrors = [];
+
+  if (sfNeedsRefresh) {
+    console.log("[session-check] Auto-refreshing Salesforce session...");
+    const code = await runNode(["scripts/run-instance.mjs", "auth:state"], { ...process.env });
+    if (code === 0) {
+      console.log("[session-check] SF session refreshed successfully.");
+      // Re-read cookies for liveness probe
+      try {
+        const data = JSON.parse(fs.readFileSync(sfStatePath, "utf8"));
+        sfCookies = Array.isArray(data) ? data : data?.cookies;
+      } catch { /* liveness probe will be skipped */ }
+    } else {
+      refreshErrors.push(`Salesforce session refresh failed (exit code ${code}). Run: audrique run --refresh-auth`);
+    }
+  }
+
+  if (connectNeedsRefresh) {
+    console.log("[session-check] Auto-refreshing Connect CCP session...");
+    const code = await runNode(["scripts/run-instance.mjs", "auth:connect-state"], { ...process.env });
+    if (code === 0) {
+      console.log("[session-check] Connect CCP session refreshed successfully.");
+      try {
+        const data = JSON.parse(fs.readFileSync(connectStatePath, "utf8"));
+        connectCookies = Array.isArray(data) ? data : data?.cookies;
+      } catch { /* liveness probe will be skipped */ }
+    } else {
+      refreshErrors.push(`Connect CCP session refresh failed (exit code ${code}). Run: audrique run --refresh-auth`);
     }
   }
 
@@ -94,7 +135,7 @@ async function validateSessions() {
       if (sfUrl) {
         probes.push(
           httpLivenessProbe(sfUrl, sfCookies, "Salesforce")
-            .then(ok => { if (!ok) errors.push("Salesforce session cookies are invalid (HTTP probe returned redirect/401). Re-auth required."); })
+            .then(ok => { if (!ok) refreshErrors.push("Salesforce session cookies are invalid (HTTP probe returned redirect/401). Re-auth required."); })
         );
       }
     }
@@ -103,7 +144,7 @@ async function validateSessions() {
       if (ccpUrl) {
         probes.push(
           httpLivenessProbe(ccpUrl, connectCookies, "Connect CCP")
-            .then(ok => { if (!ok) errors.push("Connect CCP session cookies are invalid (HTTP probe returned redirect/401). Re-auth required."); })
+            .then(ok => { if (!ok) refreshErrors.push("Connect CCP session cookies are invalid (HTTP probe returned redirect/401). Re-auth required."); })
         );
       }
     }
@@ -112,14 +153,14 @@ async function validateSessions() {
     }
   }
 
-  if (errors.length > 0) {
+  if (refreshErrors.length > 0) {
     console.error("\n[session-check] Session validation FAILED:");
-    for (const err of errors) {
+    for (const err of refreshErrors) {
       console.error(`  - ${err}`);
     }
-    console.error(`\nRefresh sessions before running tests:`);
+    console.error(`\nManual refresh:`);
     console.error(`  audrique run --refresh-auth`);
-    console.error(`  # or manually:`);
+    console.error(`  # or:`);
     console.error(`  docker compose run --rm audrique node bin/audrique.mjs auth\n`);
     process.exit(1);
   }

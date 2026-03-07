@@ -1,0 +1,46 @@
+{
+  "name": "CDO Org — Parallel Agentforce (CCP + Twilio)",
+  "version": 2,
+  "connectionSetId": "cdo-org",
+  "stopOnFailure": false,
+  "defaults": {
+    "callTrigger": {
+      "mode": "connect_ccp"
+    },
+    "timeouts": {
+      "ringSec": 120,
+      "supervisorQueueSec": 120,
+      "supervisorAgentOfferSec": 120,
+      "offerAfterQueueSec": 120
+    }
+  },
+  "scenarios": [
+    {
+      "id": "parallel-agentforce-ccp-twilio",
+      "description": "Parallel Agentforce test — CCP dials primary call, Twilio dials second call simultaneously. Verifies both calls connect and Agentforce supervisor tab shows 2 active conversations.",
+      "enabled": true,
+      "allowFailure": false,
+      "mergeVideo": false,
+      "requiresEnv": [],
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "expectation": "parallel_agentforce",
+        "entryNumber": "+18333199528",
+        "dialOnlyListenSec": 15,
+        "dialOnlyExpectedGreeting": "hi|hello|welcome|agent|help|assist",
+        "dialOnlySaveRecording": true,
+        "parallelCallSources": [
+          { "provider": "twilio" }
+        ],
+        "verifyAgentforceTab": true,
+        "parallelExpectedCount": 2,
+        "agentforceObservationTimeoutSec": 120
+      }
+    }
+  ],
+  "vocabulary": {
+    "agentApp": "Service Console",
+    "omniStatus": "Available",
+    "entryNumber": "+18333199528"
+  }
+}

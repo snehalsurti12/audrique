@@ -14,6 +14,8 @@
 # Required env vars (passed via --env-file or -e):
 #   VAULT_SEED_SF_USERNAME, VAULT_SEED_SF_PASSWORD
 #   VAULT_SEED_AWS_USERNAME, VAULT_SEED_AWS_PASSWORD, VAULT_SEED_AWS_ACCOUNT_ID
+#   VAULT_SEED_AWS_ACCESS_KEY_ID, VAULT_SEED_AWS_SECRET_ACCESS_KEY, VAULT_SEED_CONNECT_INSTANCE_ID
+#   VAULT_SEED_OAUTH_CONSUMER_KEY, VAULT_SEED_OAUTH_CONSUMER_SECRET
 #   VAULT_SEED_TWILIO_SID, VAULT_SEED_TWILIO_TOKEN (optional)
 
 set -e
@@ -53,13 +55,24 @@ if [ -n "$VAULT_SEED_SF_USERNAME" ]; then
     email_code="${VAULT_SEED_SF_EMAIL_CODE:-}"
 fi
 
-# Seed AWS/Connect credentials
+# Seed AWS/Connect credentials (console login + federation API)
 if [ -n "$VAULT_SEED_AWS_USERNAME" ]; then
   echo "[vault-seed] Seeding secret/voice/personal/aws..."
   vault kv put secret/voice/personal/aws \
     username="$VAULT_SEED_AWS_USERNAME" \
     password="${VAULT_SEED_AWS_PASSWORD:-}" \
-    account_id="${VAULT_SEED_AWS_ACCOUNT_ID:-}"
+    account_id="${VAULT_SEED_AWS_ACCOUNT_ID:-}" \
+    access_key_id="${VAULT_SEED_AWS_ACCESS_KEY_ID:-}" \
+    secret_access_key="${VAULT_SEED_AWS_SECRET_ACCESS_KEY:-}" \
+    connect_instance_id="${VAULT_SEED_CONNECT_INSTANCE_ID:-}"
+fi
+
+# Seed Audrique OAuth Connected App credentials
+if [ -n "$VAULT_SEED_OAUTH_CONSUMER_KEY" ]; then
+  echo "[vault-seed] Seeding secret/voice/audrique/oauth..."
+  vault kv put secret/voice/audrique/oauth \
+    consumer_key="$VAULT_SEED_OAUTH_CONSUMER_KEY" \
+    consumer_secret="${VAULT_SEED_OAUTH_CONSUMER_SECRET:-}"
 fi
 
 # Seed Twilio credentials (optional)

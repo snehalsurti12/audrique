@@ -38,7 +38,39 @@ export function scenarioToEnv(scenario, defaults = {}) {
 
   // ── Call trigger ──────────────────────────────────────────────────────
   env.CALL_TRIGGER_MODE = callTrigger.mode ?? "connect_ccp";
-  env.CALL_EXPECTATION = "agent_offer";
+  env.CALL_EXPECTATION = callTrigger.expectation ?? "agent_offer";
+
+  // ── Dial-only (AI Agent / Agentforce) ─────────────────────────────
+  if (callTrigger.expectation === "dial_only" || callTrigger.expectation === "parallel_agentforce") {
+    if (callTrigger.dialOnlyListenSec != null) {
+      env.DIAL_ONLY_LISTEN_SEC = String(callTrigger.dialOnlyListenSec);
+    }
+    if (callTrigger.dialOnlyExpectedGreeting) {
+      env.DIAL_ONLY_EXPECTED_GREETING = callTrigger.dialOnlyExpectedGreeting;
+    }
+    if (callTrigger.dialOnlySaveRecording != null) {
+      env.IVR_SAVE_RECORDING = String(callTrigger.dialOnlySaveRecording);
+    }
+    env.VERIFY_SUPERVISOR_QUEUE_WAITING = "false";
+    env.VERIFY_SUPERVISOR_AGENT_OFFER = "false";
+    env.CONNECT_CCP_IVR_MODE = "speech";
+  }
+
+  // ── Parallel Agentforce (multi-call source) ─────────────────────────
+  if (callTrigger.expectation === "parallel_agentforce") {
+    if (callTrigger.parallelCallSources?.length > 0) {
+      env.PARALLEL_CALL_SOURCES = JSON.stringify(callTrigger.parallelCallSources);
+    }
+    if (callTrigger.parallelExpectedCount != null) {
+      env.PARALLEL_AGENTFORCE_EXPECTED_COUNT = String(callTrigger.parallelExpectedCount);
+    }
+    if (callTrigger.agentforceObservationTimeoutSec != null) {
+      env.AGENTFORCE_OBSERVATION_TIMEOUT_SEC = String(callTrigger.agentforceObservationTimeoutSec);
+    }
+    if (callTrigger.verifyAgentforceTab) {
+      env.VERIFY_AGENTFORCE_TAB = "true";
+    }
+  }
 
   // Routing type (queue, skill, direct_agent, extension)
   if (callTrigger.routingType) {
@@ -102,6 +134,32 @@ export function scenarioToEnv(scenario, defaults = {}) {
   }
   if (callTrigger.ivrLanguage) {
     env.IVR_LANGUAGE = callTrigger.ivrLanguage;
+  }
+
+  // ── NL Caller (AI-to-AI voice testing) ─────────────────────────────
+  const nlCaller = scenario.nlCaller;
+  if (nlCaller) {
+    env.NL_CALLER_MODE = nlCaller.conversationMode || nlCaller.mode || "gemini";
+    if (nlCaller.persona) {
+      env.NL_CALLER_PERSONA_NAME = nlCaller.persona.name || "";
+      env.NL_CALLER_PERSONA_ACCOUNT = nlCaller.persona.accountNumber || "";
+      env.NL_CALLER_PERSONA_CONTEXT = nlCaller.persona.context || "";
+      env.NL_CALLER_PERSONA_OBJECTIVE = nlCaller.persona.objective || "";
+    }
+    if (nlCaller.providers?.llm) env.NL_CALLER_LLM_PROVIDER = nlCaller.providers.llm;
+    if (nlCaller.providers?.stt) env.NL_CALLER_STT_PROVIDER = nlCaller.providers.stt;
+    if (nlCaller.providers?.tts) env.NL_CALLER_TTS_PROVIDER = nlCaller.providers.tts;
+    if (nlCaller.maxTurns != null) env.NL_CALLER_MAX_TURNS = String(nlCaller.maxTurns);
+    if (nlCaller.turnTimeoutSec != null) env.NL_CALLER_TURN_TIMEOUT_SEC = String(nlCaller.turnTimeoutSec);
+    if (nlCaller.geminiModel) env.NL_CALLER_GEMINI_MODEL = nlCaller.geminiModel;
+    // Scripted conversation (JSON string)
+    if (nlCaller.conversation?.length > 0) {
+      env.NL_CALLER_CONVERSATION_SCRIPT = JSON.stringify(nlCaller.conversation);
+    }
+  }
+  // Conversation assertions
+  if (scenario.conversationAssertions?.length > 0) {
+    env.NL_CALLER_ASSERTIONS = JSON.stringify(scenario.conversationAssertions);
   }
 
   // ── Timeouts ─────────────────────────────────────────────────────────
@@ -330,6 +388,11 @@ export function scenarioToEnv(scenario, defaults = {}) {
       default:
         console.warn(`[scenario-bridge] Unknown step action: "${step.action}" — ignored.`);
     }
+  }
+
+  // Merge raw env overrides from scenario (allows v2 scenarios to set arbitrary env vars)
+  if (scenario.env && typeof scenario.env === "object") {
+    Object.assign(env, scenario.env);
   }
 
   return env;
