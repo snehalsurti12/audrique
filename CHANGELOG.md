@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.5.0] — 2026-03-07
+
+### Added
+- Parallel Agentforce testing — simultaneous multi-provider calls (CCP + Twilio) to validate AI agent concurrency
+- Twilio inbound dialer — REST API call placement as a parallel call source
+- Agentforce supervisor observer — Command Center Agentforce tab monitoring with KPI card reading
+- UI-driven parallel config — Scenario Studio "AI Agent" call outcome with multi-source and verify toggle
+- Connect GetFederationToken auth — zero-browser CCP authentication via AWS API (~2s per agent)
+- Demo video pipeline — FFmpeg-based demo generation with title cards, phase annotations, speed modulation
+
+## [0.4.0] — 2026-03-04
+
+### Added
+- Fully UI-driven configuration — all org-specific values configurable from Scenario Studio
+- Session resilience — HTTP liveness probes validate sessions before each suite run
+- Two-tab supervisor monitoring — dedicated In-Progress Work tab
+- Run from UI — select suite and run from browser with live SSE streaming
+
+### Fixed
+- Session conflict banners resolved via page reload instead of fragile button clicking
+- Stale Chromium processes killed between scenarios
+
 ## [0.3.0] — 2026-03-01
 
 ### Added

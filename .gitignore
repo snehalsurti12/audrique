@@ -29,6 +29,7 @@ instances/.vault-auth.json
 
 # Local IDE and tool settings
 .*laude/
+*laude.md
 
 # Editor
 .vscode/
