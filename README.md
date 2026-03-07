@@ -1,4 +1,4 @@
-# Audrique — Agentic Voice Testing for Contact Centers
+# Audrique — End-to-End Voice Workflow Testing (Agentic + Human + CRM)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org)
