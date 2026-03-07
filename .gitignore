@@ -27,7 +27,7 @@ instances/.vault-auth.json
 # macOS
 .DS_Store
 
-# Local IDE and tool settings
+# Local AI coding assistant settings
 .*laude/
 *laude.md
 
