@@ -36,6 +36,7 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 | Capability | Description |
 |------------|-------------|
 | **Autonomous call orchestration** | Places real calls via Connect CCP or Twilio REST API, navigates IVR menus with DTMF |
+| **AI-to-AI voice testing (NL Caller)** | Gemini Live-powered AI caller simulates real customers against Agentforce with configurable persona, tone, accent, and conversation assertions |
 | **Parallel Agentforce testing** | Simultaneous multi-provider calls to validate AI agent concurrency and supervisor monitoring |
 | **Transcription-driven IVR** | Local whisper.cpp transcribes IVR prompts in ~2.5 s, matches keywords, sends DTMF on match |
 | **Multi-agent browser verification** | 3 parallel Playwright sessions (Agent, CCP, Supervisor) |
@@ -60,6 +61,7 @@ Traditional contact center testing is **manual, slow, and siloed**. Each tool co
 | Real-time transcript | Speech captured, transcript panel updates live |
 | Hold / resume / ACW | Full call lifecycle with disposition |
 | Agentforce (AI agent) | Parallel calls from CCP + Twilio, AI greeting verification, supervisor active count |
+| AI-to-AI conversation (NL Caller) | AI customer calls Agentforce, validates greeting, issue resolution, conversation quality, with local WAV recordings |
 
 ## Quick Start
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.6.0] — 2026-03-08
+
+### Added
+- NL Caller — AI-to-AI voice testing using Gemini Live for real-time bidirectional audio conversations
+- Conversation engine with Gemini Live API integration (WebSocket-based, PCM 24kHz native audio)
+- Audio codec module — mulaw-to-PCM conversion, PCM resampling (8kHz ↔ 24kHz)
+- Local WAV recording — captures both caller (AI) and agent (Agentforce) audio as separate WAV files
+- Twilio bidirectional Stream support — WebSocket server with localtunnel/cloudflared for local dev
+- Transcript writer with configurable conversation assertions (greeting, issue detection, objective met, natural ending, max turns)
+- Scenario Studio NL Caller UI — topic presets, tone selector (7 options), voice selector (5 Gemini voices), accent selector (5 accents)
+- Scripted conversation mode with keyword detection for deterministic regression testing
+- NL Caller scenario bridge — maps nlCaller config to NL_CALLER_* env vars for Playwright
+- Example scenario: NL Caller Account Inquiry with Gemini Live
+
+### Changed
+- Playwright test timeout dynamically adjusts for NL Caller conversations (max duration + 60s buffer)
+- Twilio inbound dialer passes Stream URL for bidirectional audio when NL Caller is active
+- Scenario bridge defaults NL Caller to `dial_only` expectation (skips SF agent_offer assertions)
+- Moved localtunnel from devDependencies to dependencies for Docker runtime availability
+
 ## [0.5.0] — 2026-03-07
 
 ### Added
