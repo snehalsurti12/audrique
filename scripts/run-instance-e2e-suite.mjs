@@ -331,6 +331,7 @@ async function main() {
     const startedAt = Date.now();
     let testExitCode = 0;
     let mergeExitCode = null;
+    let errorLog = "";
     let status = dryRun ? "dry_run" : "passed";
     let reason = dryRun ? "Scenario not executed (dry-run mode)." : "";
 
@@ -351,7 +352,9 @@ async function main() {
         outputDir,
         ...playwrightArgs
       ];
-      testExitCode = await runNode(args, testEnv);
+      const testResult = await runNode(args, testEnv, { captureStderr: true });
+      testExitCode = testResult.code;
+      errorLog = testResult.stderr || "";
 
       if (mergeVideo) {
         mergeExitCode = await runNode(
@@ -379,6 +382,7 @@ async function main() {
       description,
       status,
       reason,
+      errorLog: errorLog ? errorLog.slice(-10000) : undefined,
       allowFailure,
       startedAt: new Date(startedAt).toISOString(),
       finishedAt: new Date(finishedAt).toISOString(),
@@ -580,14 +584,29 @@ function writeJson(filePath, payload) {
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
 }
 
-function runNode(args, env) {
+function runNode(args, env, opts = {}) {
   return new Promise((resolve, reject) => {
+    const captureStderr = opts.captureStderr || false;
     const child = spawn(process.execPath, args, {
       env,
-      stdio: "inherit"
+      stdio: captureStderr ? ["inherit", "inherit", "pipe"] : "inherit",
     });
+    let stderrBuf = "";
+    if (captureStderr && child.stderr) {
+      child.stderr.on("data", (chunk) => {
+        const text = chunk.toString();
+        process.stderr.write(text); // Still show live output
+        stderrBuf += text;
+      });
+    }
     child.on("error", reject);
-    child.on("exit", (code) => resolve(code ?? 1));
+    child.on("exit", (code) => {
+      if (captureStderr) {
+        resolve({ code: code ?? 1, stderr: stderrBuf });
+      } else {
+        resolve(code ?? 1);
+      }
+    });
   });
 }
 

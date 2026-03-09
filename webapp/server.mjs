@@ -15,6 +15,16 @@ import path from "node:path";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { initPool, isAvailable as dbAvailable, shutdown as dbShutdown } from "./db/client.mjs";
+import { runMigrations } from "./db/migrate.mjs";
+import { createRun, listRuns, getRun, deleteRun } from "./db/queries/runs.mjs";
+import { getScenarioResult } from "./db/queries/scenarios.mjs";
+import { getPassRateTrend, getFlakyScenarios, getScenarioHistory } from "./db/queries/trends.mjs";
+import { ingestSuiteSummary } from "./db/queries/ingest.mjs";
+import {
+  isValidUUID, sanitizePagination, sanitizeDays, sanitizeString,
+  checkRateLimit, setSecurityHeaders, logAudit,
+} from "./db/security.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
@@ -154,6 +164,9 @@ function getDefaultSystemSettings() {
       PW_VIDEO_MODE: "retain-on-failure",
       PW_HEADLESS: true,
       PW_USE_FAKE_MEDIA: true,
+    },
+    database: {
+      DATABASE_URL: "",
     },
   };
 }
@@ -1635,16 +1648,37 @@ async function handleApi(req, res) {
       });
     }
 
+    const startedAt = new Date().toISOString();
     activeRun = {
       id: runId,
       suiteFile,
       dryRun,
-      startedAt: new Date().toISOString(),
+      startedAt,
       status: "running",
       child,
       listeners: new Set(),
       lines: [],
+      dbRunId: null,
     };
+
+    // Create DB run record if database is available
+    if (dbAvailable()) {
+      try {
+        const suiteData = readJsonFile(suiteFile);
+        activeRun.dbRunId = await createRun(getTenantId(req), {
+          suiteName: suiteData?.name || path.basename(suiteFile, ".json"),
+          suiteFile,
+          status: "running",
+          startedAt,
+          stopOnFailure: suiteData?.stopOnFailure || false,
+          dryRun,
+          connectionSet: instance || null,
+          suiteConfig: suiteData,
+        });
+      } catch (err) {
+        console.error("[db] Failed to create run record:", err.message);
+      }
+    }
 
     const broadcast = (data) => {
       const msg = `data: ${JSON.stringify(data)}\n\n`;
@@ -1682,6 +1716,33 @@ async function handleApi(req, res) {
       if (activeRun) {
         activeRun.status = status;
         activeRun.exitCode = code;
+
+        // Ingest results into database
+        if (dbAvailable() && activeRun.dbRunId) {
+          const capturedRunId = activeRun.dbRunId;
+          // Find the most recent suite-summary.json for this suite
+          const resultsRoot = path.join(PROJECT_ROOT, "test-results", "e2e-suite");
+          try {
+            if (fs.existsSync(resultsRoot)) {
+              const dirs = fs.readdirSync(resultsRoot, { withFileTypes: true })
+                .filter((d) => d.isDirectory())
+                .map((d) => ({ name: d.name, mtime: fs.statSync(path.join(resultsRoot, d.name)).mtimeMs }))
+                .sort((a, b) => b.mtime - a.mtime);
+              for (const dir of dirs) {
+                const summaryPath = path.join(resultsRoot, dir.name, "suite-summary.json");
+                if (fs.existsSync(summaryPath)) {
+                  ingestSuiteSummary(getTenantId(), summaryPath, capturedRunId)
+                    .then(() => console.log(`[db] Ingested results for run ${capturedRunId}`))
+                    .catch((err) => console.error("[db] Ingestion failed:", err.message));
+                  break;
+                }
+              }
+            }
+          } catch (err) {
+            console.error("[db] Failed to find suite summary:", err.message);
+          }
+        }
+
         // Clean up listeners after a delay
         setTimeout(() => {
           if (activeRun?.id === runId) {
@@ -1755,7 +1816,188 @@ async function handleApi(req, res) {
     return true;
   }
 
+  // ── Results API (PostgreSQL-backed) ──────────────────────────────────────
+
+  // GET /api/results/status — check if database is configured
+  if (pathname === "/api/results/status" && req.method === "GET") {
+    sendJson(res, 200, { available: dbAvailable() });
+    return true;
+  }
+
+  // GET /api/results/runs — paginated run history
+  if (pathname === "/api/results/runs" && req.method === "GET") {
+    if (!dbAvailable()) {
+      sendJson(res, 503, { error: "Database not configured" });
+      return true;
+    }
+    try {
+      const tid = getTenantId(req);
+      const { page, limit } = sanitizePagination(
+        url.searchParams.get("page"),
+        url.searchParams.get("limit")
+      );
+      const status = sanitizeString(url.searchParams.get("status") || "", 20);
+      const suiteName = sanitizeString(url.searchParams.get("suite") || "", 200);
+      const result = await listRuns(tid, { page, limit, status, suiteName });
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return true;
+  }
+
+  // GET /api/results/runs/:id — single run with scenario details
+  const runDetailMatch = pathname.match(/^\/api\/results\/runs\/([0-9a-f-]{36})$/);
+  if (runDetailMatch && req.method === "GET") {
+    if (!dbAvailable()) {
+      sendJson(res, 503, { error: "Database not configured" });
+      return true;
+    }
+    const runId = runDetailMatch[1];
+    if (!isValidUUID(runId)) {
+      sendJson(res, 400, { error: "Invalid run ID format" });
+      return true;
+    }
+    try {
+      const tid = getTenantId(req);
+      const run = await getRun(tid, runId);
+      if (!run) {
+        sendJson(res, 404, { error: "Run not found" });
+      } else {
+        sendJson(res, 200, { run });
+      }
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return true;
+  }
+
+  // DELETE /api/results/runs/:id — delete a run and all children
+  const runDeleteMatch = pathname.match(/^\/api\/results\/runs\/([0-9a-f-]{36})$/);
+  if (runDeleteMatch && req.method === "DELETE") {
+    if (!dbAvailable()) {
+      sendJson(res, 503, { error: "Database not configured" });
+      return true;
+    }
+    const deleteRunId = runDeleteMatch[1];
+    if (!isValidUUID(deleteRunId)) {
+      sendJson(res, 400, { error: "Invalid run ID format" });
+      return true;
+    }
+    try {
+      const tid = getTenantId(req);
+      const deleted = await deleteRun(tid, deleteRunId);
+      if (!deleted) {
+        sendJson(res, 404, { error: "Run not found" });
+      } else {
+        logAudit(tid, "delete", "run", deleteRunId);
+        sendJson(res, 200, { message: "Run deleted" });
+      }
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return true;
+  }
+
+  // GET /api/results/runs/:runId/scenarios/:scenarioResultId — scenario deep-dive
+  const scenarioDetailMatch = pathname.match(
+    /^\/api\/results\/runs\/[0-9a-f-]{36}\/scenarios\/([0-9a-f-]{36})$/
+  );
+  if (scenarioDetailMatch && req.method === "GET") {
+    if (!dbAvailable()) {
+      sendJson(res, 503, { error: "Database not configured" });
+      return true;
+    }
+    const scenarioResultId = scenarioDetailMatch[1];
+    if (!isValidUUID(scenarioResultId)) {
+      sendJson(res, 400, { error: "Invalid scenario result ID format" });
+      return true;
+    }
+    try {
+      const tid = getTenantId(req);
+      const scenario = await getScenarioResult(tid, scenarioResultId);
+      if (!scenario) {
+        sendJson(res, 404, { error: "Scenario result not found" });
+      } else {
+        sendJson(res, 200, { scenario });
+      }
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return true;
+  }
+
+  // GET /api/results/trends — pass rate trends
+  if (pathname === "/api/results/trends" && req.method === "GET") {
+    if (!dbAvailable()) {
+      sendJson(res, 503, { error: "Database not configured" });
+      return true;
+    }
+    try {
+      const tid = getTenantId(req);
+      const days = sanitizeDays(url.searchParams.get("days"), 30);
+      const suiteName = sanitizeString(url.searchParams.get("suite") || "", 200);
+      const trends = await getPassRateTrend(tid, { days, suiteName });
+      sendJson(res, 200, trends);
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return true;
+  }
+
+  // GET /api/results/flaky — flaky scenario detection
+  if (pathname === "/api/results/flaky" && req.method === "GET") {
+    if (!dbAvailable()) {
+      sendJson(res, 503, { error: "Database not configured" });
+      return true;
+    }
+    try {
+      const tid = getTenantId(req);
+      let minRuns = parseInt(url.searchParams.get("minRuns"), 10);
+      if (!Number.isFinite(minRuns) || minRuns < 1) minRuns = 3;
+      if (minRuns > 1000) minRuns = 1000;
+      const days = sanitizeDays(url.searchParams.get("days"), 30);
+      const result = await getFlakyScenarios(tid, { minRuns, days });
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return true;
+  }
+
+  // GET /api/results/scenarios/:scenarioId/history — history for a scenario ID
+  const scenarioHistoryMatch = pathname.match(/^\/api\/results\/scenarios\/([^/]+)\/history$/);
+  if (scenarioHistoryMatch && req.method === "GET") {
+    if (!dbAvailable()) {
+      sendJson(res, 503, { error: "Database not configured" });
+      return true;
+    }
+    try {
+      const tid = getTenantId(req);
+      const scenarioId = sanitizeString(decodeURIComponent(scenarioHistoryMatch[1]), 500);
+      if (!scenarioId) {
+        sendJson(res, 400, { error: "Invalid scenario ID" });
+        return true;
+      }
+      let histLimit = parseInt(url.searchParams.get("limit"), 10);
+      if (!Number.isFinite(histLimit) || histLimit < 1) histLimit = 20;
+      if (histLimit > 100) histLimit = 100;
+      const result = await getScenarioHistory(tid, scenarioId, { limit: histLimit });
+      sendJson(res, 200, result);
+    } catch (err) {
+      sendJson(res, 500, { error: err.message });
+    }
+    return true;
+  }
+
   return false;
+}
+
+// ── Tenant resolution ───────────────────────────────────────────────────────
+const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
+function getTenantId(/* req */) {
+  // Future: extract from auth header or session. For now, use default tenant.
+  return DEFAULT_TENANT_ID;
 }
 
 // ── Active run state ────────────────────────────────────────────────────────
@@ -1764,9 +2006,23 @@ let activeRun = null;
 // ── HTTP Server ─────────────────────────────────────────────────────────────
 
 const server = http.createServer(async (req, res) => {
+  // Security headers on every response
+  setSecurityHeaders(res);
+
   try {
     // API routes
     if (req.url.startsWith("/api/")) {
+      // Rate limiting for API endpoints
+      const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim()
+        || req.socket.remoteAddress || "unknown";
+      const rl = checkRateLimit(clientIp);
+      res.setHeader("X-RateLimit-Remaining", String(rl.remaining));
+      if (!rl.allowed) {
+        res.setHeader("Retry-After", String(Math.ceil((rl.resetAt - Date.now()) / 1000)));
+        sendJson(res, 429, { error: "Rate limit exceeded. Try again shortly." });
+        return;
+      }
+
       const handled = await handleApi(req, res);
       if (handled) return;
       sendJson(res, 404, { error: "Unknown API endpoint" });
@@ -1792,7 +2048,66 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-resolveOAuthKeysFromVault().then(() => {
+/**
+ * Auto-ingest existing JSON suite results into the database.
+ * Scans test-results/e2e-suite/ for suite-summary.json files not yet in DB.
+ * Runs in the background after server startup — does not block boot.
+ */
+async function autoIngestExistingResults() {
+  if (!dbAvailable()) return;
+
+  const resultsRoot = path.join(PROJECT_ROOT, "test-results", "e2e-suite");
+  if (!fs.existsSync(resultsRoot)) return;
+
+  try {
+    const tid = getTenantId();
+    const dirs = fs.readdirSync(resultsRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort();
+
+    let ingested = 0;
+    let skipped = 0;
+
+    for (const dirName of dirs) {
+      const summaryPath = path.join(resultsRoot, dirName, "suite-summary.json");
+      if (!fs.existsSync(summaryPath)) { skipped++; continue; }
+
+      try {
+        await ingestSuiteSummary(tid, summaryPath);
+        ingested++;
+      } catch (err) {
+        // Duplicate run_dir entries (already ingested) are expected — skip silently
+        if (err.message?.includes("duplicate key") || err.code === "23505") {
+          skipped++;
+        } else {
+          console.error(`[auto-ingest] Failed: ${dirName} — ${err.message}`);
+        }
+      }
+    }
+
+    if (ingested > 0) {
+      console.log(`[auto-ingest] Backfilled ${ingested} existing runs into database (${skipped} already present)`);
+    }
+  } catch (err) {
+    console.error("[auto-ingest] Error scanning results:", err.message);
+  }
+}
+
+async function startServer() {
+  await resolveOAuthKeysFromVault();
+
+  // Initialize database (optional — server works without it)
+  try {
+    await initPool();
+    if (dbAvailable()) {
+      await runMigrations();
+    }
+  } catch (err) {
+    console.error("[db] Database initialization failed:", err.message);
+    console.log("[db] Continuing without database — results tracking disabled");
+  }
+
   server.listen(PORT, () => {
     console.log("");
     console.log("  ┌──────────────────────────────────────────────┐");
@@ -1800,9 +2115,25 @@ resolveOAuthKeysFromVault().then(() => {
     console.log("  │   Audrique Scenario Studio                   │");
     console.log(`  │   http://localhost:${PORT}                      │`);
     console.log("  │                                              │");
+    if (dbAvailable()) {
+      console.log("  │   Database: connected                        │");
+    } else {
+      console.log("  │   Database: not configured                   │");
+    }
     console.log("  │   Press Ctrl+C to stop                       │");
     console.log("  │                                              │");
     console.log("  └──────────────────────────────────────────────┘");
     console.log("");
+
+    // Auto-ingest existing JSON results into DB (background, non-blocking)
+    autoIngestExistingResults();
   });
+}
+
+// Graceful shutdown
+process.on("SIGTERM", async () => {
+  await dbShutdown();
+  process.exit(0);
 });
+
+startServer();

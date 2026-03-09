@@ -3418,6 +3418,43 @@ function esc(text) {
   return div.innerHTML;
 }
 
+/**
+ * Extract the most useful error summary from Playwright stderr output.
+ * Looks for: assertion failures, timeout messages, expect() mismatches, Error lines.
+ */
+function extractErrorSummary(errorLog) {
+  if (!errorLog) return null;
+  const lines = errorLog.split("\n");
+  // Priority patterns — most informative first
+  const patterns = [
+    /Error:\s+(.+)/,                              // Generic "Error: ..." messages
+    /expect\(.*\)\.(to\w+)\(/,                    // Playwright expect assertions
+    /Timeout\s+\d+ms\s+exceeded/i,                // Timeout exceeded
+    /waiting for\s+(selector|locator)\s+"([^"]+)"/i, // Waiting for selector
+    /page\.waitFor\w+:\s*(.+)/,                   // page.waitFor* messages
+    /locator\.\w+:\s*(.+)/,                       // locator.* messages
+    /Target page, context or browser has been closed/i, // Crash
+    /net::ERR_/,                                   // Network errors
+    /Protocol error/,                              // CDP errors
+  ];
+  for (const pattern of patterns) {
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (pattern.test(trimmed) && trimmed.length > 5 && trimmed.length < 300) {
+        return trimmed;
+      }
+    }
+  }
+  // Fallback: find any line with "error" or "fail" (case-insensitive)
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/\b(error|fail|timeout|crash)\b/i.test(trimmed) && trimmed.length > 10 && trimmed.length < 300) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
 function toast(message, type = "info") {
   const container = document.getElementById("toast-container");
   const el = document.createElement("div");
@@ -5621,3 +5658,451 @@ function discoveryOptions(items, selectedValue) {
     return `<option value="${esc(i.value)}"${sel}>${esc(i.value)}</option>`;
   }).join("");
 }
+
+// ── Results Panel (PostgreSQL-backed run history) ────────────────────────────
+
+const resultsState = {
+  available: false,
+  page: 1,
+  currentRunId: null,
+  currentScenarioResultId: null,
+  currentRunData: null,
+};
+
+// Check if DB is available on page load
+(async function checkResultsAvailability() {
+  try {
+    const res = await api("/results/status");
+    resultsState.available = res?.available === true;
+    const btn = document.getElementById("btn-results");
+    if (btn && !resultsState.available) {
+      btn.title = "Database not configured — set DATABASE_URL to enable";
+      btn.style.opacity = "0.5";
+    }
+  } catch { /* ignore */ }
+})();
+
+// Results button click
+document.getElementById("btn-results")?.addEventListener("click", () => {
+  if (!resultsState.available) {
+    toast("Database not configured. Set DATABASE_URL in environment or Advanced Settings.", "error");
+    return;
+  }
+  openResults();
+});
+
+function hideAllPanels() {
+  document.getElementById("landing")?.classList.add("hidden");
+  document.getElementById("wizard")?.classList.add("hidden");
+  document.getElementById("preview-panel")?.classList.add("hidden");
+  document.getElementById("run-panel")?.classList.add("hidden");
+  document.getElementById("results-panel")?.classList.add("hidden");
+  document.getElementById("results-run-panel")?.classList.add("hidden");
+  document.getElementById("results-scenario-panel")?.classList.add("hidden");
+}
+
+async function openResults() {
+  hideAllPanels();
+  document.getElementById("results-panel")?.classList.remove("hidden");
+  resultsState.page = 1;
+  await loadRunHistory();
+  await loadTrends();
+}
+
+async function loadRunHistory() {
+  const wrap = document.getElementById("results-table-wrap");
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="results-placeholder">Loading...</div>';
+
+  const status = document.getElementById("results-status-filter")?.value || "";
+  const res = await api(`/results/runs?page=${resultsState.page}&limit=25${status ? `&status=${status}` : ""}`);
+
+  if (res.error) {
+    wrap.innerHTML = `<div class="results-placeholder">${esc(res.error)}</div>`;
+    return;
+  }
+
+  if (!res.runs || res.runs.length === 0) {
+    wrap.innerHTML = '<div class="results-placeholder">No runs found. Execute a test suite to see results here.</div>';
+    return;
+  }
+
+  const rows = res.runs.map(r => {
+    const date = new Date(r.started_at).toLocaleString();
+    const duration = r.duration_sec ? `${Math.round(r.duration_sec)}s` : "-";
+    const statusClass = r.status === "passed" ? "badge-success" : r.status === "failed" ? "badge-danger" : "badge-warning";
+    const passed = r.passed_scenarios || 0;
+    const failed = r.failed_scenarios || 0;
+    const total = r.total_scenarios || 0;
+    return `<tr class="results-row" data-run-id="${r.id}">
+      <td class="results-suite-name">${esc(r.suite_name)}</td>
+      <td>${date}</td>
+      <td>${duration}</td>
+      <td><span class="badge ${statusClass}">${r.status}</span></td>
+      <td>${passed}/${total} passed${failed > 0 ? `, ${failed} failed` : ""}</td>
+    </tr>`;
+  }).join("");
+
+  wrap.innerHTML = `<table class="results-table">
+    <thead><tr><th>Suite</th><th>Date</th><th>Duration</th><th>Status</th><th>Results</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+
+  // Click handler for rows
+  wrap.querySelectorAll(".results-row").forEach(row => {
+    row.addEventListener("click", () => openRunDetail(row.dataset.runId));
+  });
+
+  // Pagination
+  const pagination = document.getElementById("results-pagination");
+  if (pagination && res.total > 25) {
+    const totalPages = Math.ceil(res.total / 25);
+    pagination.innerHTML = `
+      <button class="btn btn-ghost btn-sm" ${resultsState.page <= 1 ? "disabled" : ""} id="btn-results-prev">Prev</button>
+      <span>Page ${resultsState.page} of ${totalPages}</span>
+      <button class="btn btn-ghost btn-sm" ${resultsState.page >= totalPages ? "disabled" : ""} id="btn-results-next">Next</button>
+    `;
+    document.getElementById("btn-results-prev")?.addEventListener("click", () => { resultsState.page--; loadRunHistory(); });
+    document.getElementById("btn-results-next")?.addEventListener("click", () => { resultsState.page++; loadRunHistory(); });
+  } else if (pagination) {
+    pagination.innerHTML = "";
+  }
+}
+
+async function loadTrends() {
+  const el = document.getElementById("results-trends");
+  if (!el) return;
+
+  const res = await api("/results/trends?days=30");
+  if (res.error || !res.dailyPassRate) {
+    el.innerHTML = "";
+    return;
+  }
+
+  const flakyRes = await api("/results/flaky?minRuns=3&days=30");
+  const flakyCount = flakyRes?.flakyScenarios?.length || 0;
+
+  // Trend bar chart (inline SVG)
+  let chartSvg = "";
+  if (res.dailyPassRate.length > 0) {
+    const barW = 14, gap = 3, h = 80;
+    const w = res.dailyPassRate.length * (barW + gap);
+    let bars = "";
+    res.dailyPassRate.forEach((d, i) => {
+      const x = i * (barW + gap);
+      const barH = (d.passRate / 100) * (h - 16);
+      const color = d.passRate >= 80 ? "var(--clr-success, #059669)" : d.passRate >= 50 ? "var(--clr-warning, #d97706)" : "var(--clr-danger, #dc2626)";
+      bars += `<rect x="${x}" y="${h - 16 - barH}" width="${barW}" height="${barH}" fill="${color}" rx="2"><title>${d.date}: ${d.passRate}% (${d.passedRuns}/${d.totalRuns})</title></rect>`;
+    });
+    chartSvg = `<svg width="${w}" height="${h}" class="trend-chart">${bars}</svg>`;
+  }
+
+  el.innerHTML = `
+    <div class="trends-bar">
+      <div class="trend-stat">
+        <span class="trend-label">Pass Rate (30d)</span>
+        <span class="trend-value ${res.overallPassRate >= 80 ? "trend-good" : "trend-bad"}">${res.overallPassRate}%</span>
+      </div>
+      <div class="trend-stat">
+        <span class="trend-label">Total Runs</span>
+        <span class="trend-value">${res.totalRuns}</span>
+      </div>
+      <div class="trend-stat">
+        <span class="trend-label">Avg Duration</span>
+        <span class="trend-value">${Math.round(res.avgDurationSec || 0)}s</span>
+      </div>
+      ${flakyCount > 0 ? `<div class="trend-stat trend-warn"><span class="trend-label">Flaky Tests</span><span class="trend-value trend-bad">${flakyCount}</span></div>` : ""}
+      <div class="trend-chart-wrap">${chartSvg}</div>
+    </div>
+  `;
+}
+
+async function openRunDetail(runId) {
+  hideAllPanels();
+  document.getElementById("results-run-panel")?.classList.remove("hidden");
+  resultsState.currentRunId = runId;
+
+  const titleEl = document.getElementById("results-run-title");
+  const metaEl = document.getElementById("results-run-meta");
+  const scenariosEl = document.getElementById("results-run-scenarios");
+  if (titleEl) titleEl.textContent = "Loading...";
+  if (metaEl) metaEl.innerHTML = "";
+  if (scenariosEl) scenariosEl.innerHTML = "";
+
+  const res = await api(`/results/runs/${runId}`);
+  if (res.error || !res.run) {
+    if (titleEl) titleEl.textContent = "Run not found";
+    return;
+  }
+
+  const run = res.run;
+  resultsState.currentRunData = run;
+  const statusClass = run.status === "passed" ? "badge-success" : run.status === "failed" ? "badge-danger" : "badge-warning";
+
+  if (titleEl) titleEl.innerHTML = `${esc(run.suite_name)} <span class="badge ${statusClass}">${run.status}</span>`;
+
+  if (metaEl) {
+    metaEl.innerHTML = `
+      <div class="run-meta-grid">
+        <span>Started:</span><span>${new Date(run.started_at).toLocaleString()}</span>
+        <span>Duration:</span><span>${run.duration_sec ? Math.round(run.duration_sec) + "s" : "-"}</span>
+        <span>Connection:</span><span>${esc(run.connection_set || "-")}</span>
+        <span>Dry Run:</span><span>${run.dry_run ? "Yes" : "No"}</span>
+      </div>
+    `;
+  }
+
+  if (scenariosEl && run.scenarios) {
+    scenariosEl.innerHTML = run.scenarios.map(sc => {
+      const scStatus = sc.status === "passed" ? "badge-success" :
+                        sc.status === "failed" ? "badge-danger" :
+                        sc.status === "allowed_failure" ? "badge-warning" : "badge-muted";
+      const duration = sc.duration_sec ? `${Math.round(sc.duration_sec)}s` : "";
+      const assertInfo = sc.assertion_count > 0 ?
+        `<span class="sc-assert-info">${sc.assertions_passed}/${sc.assertion_count} assertions</span>` : "";
+      const transcriptBadge = sc.has_transcript ? '<span class="badge badge-info">Transcript</span>' : "";
+
+      // Build failure context for the card
+      let failureHint = "";
+      if (sc.status === "failed" || sc.status === "allowed_failure") {
+        const hints = [];
+        if (sc.reason) hints.push(sc.reason);
+        if (sc.supervisor_observation?.observation?.reason) {
+          hints.push("Supervisor: " + sc.supervisor_observation.observation.reason.split("\n")[0]);
+        }
+        if (sc.error_log) {
+          const errorSummary = extractErrorSummary(sc.error_log);
+          if (errorSummary && errorSummary !== sc.reason) hints.push(errorSummary);
+        }
+        if (sc.assertion_count > 0 && Number(sc.assertions_passed) < Number(sc.assertion_count)) {
+          hints.push(`${sc.assertions_passed}/${sc.assertion_count} assertions passed`);
+        }
+        failureHint = hints.map(h => `<div class="results-sc-reason">${esc(h)}</div>`).join("");
+      }
+
+      return `<div class="results-sc-card ${sc.status === 'failed' ? 'sc-card-failed' : ''}" data-scenario-result-id="${sc.id}">
+        <div class="results-sc-header">
+          <span class="results-sc-name">${esc(sc.scenario_id)}</span>
+          <span class="badge ${scStatus}">${sc.status}</span>
+        </div>
+        <div class="results-sc-body">
+          ${sc.description ? `<div class="results-sc-desc">${esc(sc.description)}</div>` : ""}
+          ${failureHint}
+          <div class="results-sc-meta">${duration} ${assertInfo} ${transcriptBadge}</div>
+        </div>
+      </div>`;
+    }).join("");
+
+    scenariosEl.querySelectorAll(".results-sc-card").forEach(card => {
+      card.addEventListener("click", () => openScenarioDetail(runId, card.dataset.scenarioResultId));
+    });
+  }
+}
+
+async function openScenarioDetail(runId, scenarioResultId) {
+  hideAllPanels();
+  document.getElementById("results-scenario-panel")?.classList.remove("hidden");
+  resultsState.currentScenarioResultId = scenarioResultId;
+
+  const titleEl = document.getElementById("results-scenario-title");
+  const contentEl = document.getElementById("results-tab-content");
+  if (titleEl) titleEl.textContent = "Loading...";
+  if (contentEl) contentEl.innerHTML = "";
+
+  const res = await api(`/results/runs/${runId}/scenarios/${scenarioResultId}`);
+  if (res.error || !res.scenario) {
+    if (titleEl) titleEl.textContent = "Scenario not found";
+    return;
+  }
+
+  const sc = res.scenario;
+  const statusClass = sc.status === "passed" ? "badge-success" : sc.status === "failed" ? "badge-danger" : "badge-warning";
+  if (titleEl) {
+    let headerHtml = `${esc(sc.scenario_id)} <span class="badge ${statusClass}">${sc.status}</span>`;
+    if (sc.description) headerHtml += `<div class="results-sc-desc" style="margin-top:4px;font-size:13px;">${esc(sc.description)}</div>`;
+    if (sc.reason && (sc.status === "failed" || sc.status === "allowed_failure")) {
+      headerHtml += `<div class="results-sc-reason" style="margin-top:4px;">${esc(sc.reason)}</div>`;
+    }
+    titleEl.innerHTML = headerHtml;
+  }
+
+  // Bind tab clicks
+  document.querySelectorAll("[data-results-tab]").forEach(tab => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll("[data-results-tab]").forEach(t => t.classList.remove("active"));
+      tab.classList.add("active");
+      renderScenarioTab(tab.dataset.resultsTab, sc);
+    });
+  });
+
+  // Auto-select best tab: error log for failed, timeline for passed
+  const isFailed = sc.status === "failed" || sc.status === "allowed_failure";
+  const hasErrorLog = sc.error_log && sc.error_log.trim().length > 0;
+  const defaultTab = (isFailed && hasErrorLog) ? "error-log"
+                   : (isFailed && sc.assertions?.length > 0) ? "assertions"
+                   : "timeline";
+  document.querySelectorAll("[data-results-tab]").forEach(t => t.classList.remove("active"));
+  document.querySelector(`[data-results-tab="${defaultTab}"]`)?.classList.add("active");
+  renderScenarioTab(defaultTab, sc);
+}
+
+function renderScenarioTab(tabName, sc) {
+  const el = document.getElementById("results-tab-content");
+  if (!el) return;
+
+  switch (tabName) {
+    case "timeline": {
+      if (!sc.timeline || sc.timeline.length === 0) {
+        el.innerHTML = '<div class="results-placeholder">No timeline data</div>';
+        return;
+      }
+      const firstMs = sc.timeline[0]?.event_time_ms || 0;
+      const rows = sc.timeline.map(e => {
+        const relSec = ((e.event_time_ms - firstMs) / 1000).toFixed(1);
+        return `<div class="timeline-event">
+          <span class="timeline-dot"></span>
+          <span class="timeline-name">${esc(e.event_name)}</span>
+          <span class="timeline-time">+${relSec}s</span>
+        </div>`;
+      }).join("");
+      el.innerHTML = `<div class="timeline-list">${rows}</div>`;
+      break;
+    }
+    case "assertions": {
+      if (!sc.assertions || sc.assertions.length === 0) {
+        el.innerHTML = '<div class="results-placeholder">No assertions</div>';
+        return;
+      }
+      const rows = sc.assertions.map(a => {
+        const icon = a.passed ? "pass" : "fail";
+        return `<div class="assertion-row assertion-${icon}">
+          <span class="assertion-icon">${a.passed ? "PASS" : "FAIL"}</span>
+          <span class="assertion-type">${esc(a.assertion_type)}</span>
+          <span class="assertion-detail">${esc(a.detail || "")}</span>
+        </div>`;
+      }).join("");
+      el.innerHTML = `<div class="assertion-list">${rows}</div>`;
+      break;
+    }
+    case "error-log": {
+      if (!sc.error_log || sc.error_log.trim().length === 0) {
+        // Show reason as fallback even if no stderr captured
+        if (sc.reason) {
+          el.innerHTML = `<div class="error-log-container">
+            <div class="error-log-label">Failure Reason</div>
+            <pre class="error-log-pre">${esc(sc.reason)}</pre>
+            <div class="results-placeholder" style="margin-top:12px;">No detailed Playwright error output captured for this run.<br>Future runs will capture full stderr for failure diagnosis.</div>
+          </div>`;
+        } else {
+          el.innerHTML = '<div class="results-placeholder">No error log captured. Future runs will capture Playwright stderr.</div>';
+        }
+        return;
+      }
+      el.innerHTML = `<div class="error-log-container">
+        ${sc.reason ? `<div class="error-log-label">Failure Reason</div><pre class="error-log-reason">${esc(sc.reason)}</pre>` : ""}
+        <div class="error-log-label">Playwright Error Output</div>
+        <pre class="error-log-pre">${esc(sc.error_log)}</pre>
+      </div>`;
+      break;
+    }
+    case "supervisor": {
+      if (!sc.supervisor_observation) {
+        el.innerHTML = '<div class="results-placeholder">No supervisor observation data for this scenario.</div>';
+        return;
+      }
+      const obs = sc.supervisor_observation;
+      const obsStatus = obs.observation?.status || "unknown";
+      const obsStatusClass = obsStatus === "confirmed" ? "badge-success" : obsStatus === "rejected" ? "badge-danger" : "badge-warning";
+      el.innerHTML = `<div class="supervisor-obs-container">
+        <div class="run-meta-grid">
+          <span>Queue Name:</span><span>${esc(obs.queueName || "-")}</span>
+          <span>Observation Status:</span><span><span class="badge ${obsStatusClass}">${obsStatus}</span></span>
+          <span>Baseline Waiting:</span><span>${obs.baselineWaitingCount ?? "-"}</span>
+          <span>Baseline In-Progress:</span><span>${obs.baselineInProgressCount ?? "-"}</span>
+        </div>
+        ${obs.observation?.reason ? `
+          <div class="error-log-label" style="margin-top:12px;">Observation Detail</div>
+          <pre class="error-log-pre">${esc(obs.observation.reason)}</pre>
+        ` : ""}
+        ${obs.baselineInProgressSignature ? `
+          <div class="error-log-label" style="margin-top:12px;">Baseline Signature</div>
+          <pre class="error-log-reason">${esc(obs.baselineInProgressSignature)}</pre>
+        ` : ""}
+      </div>`;
+      break;
+    }
+    case "transcript": {
+      if (!sc.transcript) {
+        el.innerHTML = '<div class="results-placeholder">No transcript (NL Caller scenarios only)</div>';
+        return;
+      }
+      const t = sc.transcript;
+      const turnHtml = (t.turns || []).map(turn => {
+        const cls = turn.speaker === "caller" ? "turn-caller" : "turn-agent";
+        return `<div class="transcript-turn ${cls}">
+          <span class="turn-speaker">${esc(turn.speaker)}</span>
+          <span class="turn-text">${esc(turn.text)}</span>
+        </div>`;
+      }).join("");
+      el.innerHTML = `
+        <div class="transcript-meta">
+          <span>Mode: ${esc(t.mode)}</span>
+          <span>Persona: ${esc(t.persona_name || "-")}</span>
+          <span>Turns: ${t.total_turns} (${t.caller_turns} caller, ${t.agent_turns} agent)</span>
+          <span>Duration: ${t.duration_sec ? Math.round(t.duration_sec) + "s" : "-"}</span>
+        </div>
+        <div class="transcript-turns">${turnHtml || '<div class="results-placeholder">No turns recorded</div>'}</div>
+      `;
+      break;
+    }
+    case "artifacts": {
+      if (!sc.artifacts || sc.artifacts.length === 0) {
+        el.innerHTML = '<div class="results-placeholder">No artifacts</div>';
+        return;
+      }
+      const rows = sc.artifacts.map(a => `
+        <div class="artifact-row">
+          <span class="artifact-type">${esc(a.artifact_type)}</span>
+          <span class="artifact-name">${esc(a.file_name || a.file_path)}</span>
+        </div>
+      `).join("");
+      el.innerHTML = `<div class="artifact-list">${rows}</div>`;
+      break;
+    }
+    case "env": {
+      if (!sc.applied_env || Object.keys(sc.applied_env).length === 0) {
+        el.innerHTML = '<div class="results-placeholder">No environment variables</div>';
+        return;
+      }
+      const rows = Object.entries(sc.applied_env).map(([k, v]) => {
+        const masked = /PASSWORD|SECRET|TOKEN|KEY/i.test(k) ? "***" : v;
+        return `<div class="env-row"><span class="env-key">${esc(k)}</span><span class="env-val">${esc(String(masked))}</span></div>`;
+      }).join("");
+      el.innerHTML = `<div class="env-list">${rows}</div>`;
+      break;
+    }
+  }
+}
+
+// Results panel event bindings
+document.getElementById("btn-results-refresh")?.addEventListener("click", loadRunHistory);
+document.getElementById("btn-results-close")?.addEventListener("click", () => {
+  document.getElementById("results-panel")?.classList.add("hidden");
+  document.getElementById("landing")?.classList.remove("hidden");
+});
+document.getElementById("btn-results-back")?.addEventListener("click", openResults);
+document.getElementById("btn-results-run-close")?.addEventListener("click", () => {
+  document.getElementById("results-run-panel")?.classList.add("hidden");
+  document.getElementById("landing")?.classList.remove("hidden");
+});
+document.getElementById("btn-results-scenario-back")?.addEventListener("click", () => {
+  if (resultsState.currentRunId) openRunDetail(resultsState.currentRunId);
+});
+document.getElementById("btn-results-scenario-close")?.addEventListener("click", () => {
+  document.getElementById("results-scenario-panel")?.classList.add("hidden");
+  document.getElementById("landing")?.classList.remove("hidden");
+});
+document.getElementById("results-status-filter")?.addEventListener("change", () => {
+  resultsState.page = 1;
+  loadRunHistory();
+});

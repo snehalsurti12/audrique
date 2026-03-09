@@ -31,6 +31,8 @@
         <button class="btn btn-ghost btn-sm" id="btn-suite-settings" title="Suite settings">&#x2699;</button>
         <button class="btn btn-outline btn-sm" id="btn-suite-create">+ Suite</button>
         <div class="top-divider"></div>
+        <button class="btn btn-ghost btn-sm" id="btn-results" title="View run history">Results</button>
+        <div class="top-divider"></div>
         <div class="setup-menu" id="setup-menu">
           <button class="btn btn-ghost btn-sm setup-trigger" id="btn-setup" title="Setup">&#x2699; Setup</button>
           <div class="setup-dropdown hidden" id="setup-dropdown">
@@ -126,6 +128,61 @@
             <button class="btn btn-outline" id="btn-back-to-edit">Edit Scenario</button>
             <button class="btn btn-primary" id="btn-save-scenario">Save to Suite</button>
           </div>
+        </div>
+
+        <!-- Results Panel (run history from DB) -->
+        <div class="results-panel hidden" id="results-panel">
+          <div class="results-header">
+            <h3>Run History</h3>
+            <div class="results-actions">
+              <select id="results-status-filter" class="suite-select results-filter">
+                <option value="">All statuses</option>
+                <option value="passed">Passed</option>
+                <option value="failed">Failed</option>
+              </select>
+              <button class="btn btn-ghost btn-sm" id="btn-results-refresh">Refresh</button>
+              <button class="btn btn-outline btn-sm" id="btn-results-close">Close</button>
+            </div>
+          </div>
+          <div class="results-trends" id="results-trends"></div>
+          <div class="results-table-wrap" id="results-table-wrap">
+            <div class="results-placeholder">Loading...</div>
+          </div>
+          <div class="results-pagination" id="results-pagination"></div>
+        </div>
+
+        <!-- Results Run Detail -->
+        <div class="results-panel hidden" id="results-run-panel">
+          <div class="results-header">
+            <button class="btn btn-ghost btn-sm" id="btn-results-back">&larr; Back</button>
+            <h3 id="results-run-title">Run Detail</h3>
+            <div class="results-actions">
+              <button class="btn btn-outline btn-sm" id="btn-results-run-close">Close</button>
+            </div>
+          </div>
+          <div class="results-run-meta" id="results-run-meta"></div>
+          <div class="results-run-scenarios" id="results-run-scenarios"></div>
+        </div>
+
+        <!-- Results Scenario Detail -->
+        <div class="results-panel hidden" id="results-scenario-panel">
+          <div class="results-header">
+            <button class="btn btn-ghost btn-sm" id="btn-results-scenario-back">&larr; Back to Run</button>
+            <h3 id="results-scenario-title">Scenario Detail</h3>
+            <div class="results-actions">
+              <button class="btn btn-outline btn-sm" id="btn-results-scenario-close">Close</button>
+            </div>
+          </div>
+          <div class="results-tabs" id="results-scenario-tabs">
+            <button class="results-tab active" data-results-tab="timeline">Timeline</button>
+            <button class="results-tab" data-results-tab="assertions">Assertions</button>
+            <button class="results-tab" data-results-tab="error-log">Error Log</button>
+            <button class="results-tab" data-results-tab="transcript">Transcript</button>
+            <button class="results-tab" data-results-tab="supervisor">Supervisor</button>
+            <button class="results-tab" data-results-tab="artifacts">Artifacts</button>
+            <button class="results-tab" data-results-tab="env">Environment</button>
+          </div>
+          <div class="results-tab-content" id="results-tab-content"></div>
         </div>
 
         <!-- Run Panel (live execution) -->

@@ -1,0 +1,44 @@
+{
+  "name": "CDO Org — Agentforce Connectivity",
+  "version": 2,
+  "connectionSetId": "cdo-org",
+  "stopOnFailure": false,
+  "defaults": {
+    "callTrigger": {
+      "mode": "connect_ccp"
+    },
+    "timeouts": {
+      "ringSec": 90,
+      "supervisorQueueSec": 90,
+      "supervisorAgentOfferSec": 90,
+      "offerAfterQueueSec": 120
+    }
+  },
+  "scenarios": [
+    {
+      "id": "agentforce-dial-connectivity",
+      "description": "Basic connectivity test — CCP dials entrypoint number, verifies call connects to Agentforce. No DTMF, no IVR navigation.",
+      "enabled": true,
+      "allowFailure": false,
+      "mergeVideo": false,
+      "requiresEnv": [],
+      "env": {
+        "CALL_TRIGGER_MODE": "connect_ccp",
+        "CALL_EXPECTATION": "dial_only",
+        "CONNECT_CCP_IVR_MODE": "speech",
+        "VERIFY_SUPERVISOR_QUEUE_WAITING": "false",
+        "VERIFY_SUPERVISOR_AGENT_OFFER": "false",
+        "VOICE_RING_TIMEOUT_SEC": "120",
+        "CONNECT_CCP_IVR_DIGITS": "",
+        "DIAL_ONLY_LISTEN_SEC": "15",
+        "DIAL_ONLY_EXPECTED_GREETING": "hi|hello|welcome|agent|help|assist",
+        "IVR_SAVE_RECORDING": "true"
+      }
+    }
+  ],
+  "vocabulary": {
+    "agentApp": "Service Console",
+    "omniStatus": "Available",
+    "entryNumber": "+18333199528"
+  }
+}

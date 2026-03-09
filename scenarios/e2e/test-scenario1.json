@@ -1,0 +1,32 @@
+{
+  "name": "Scenario 1 Only — Inbound Agent Offer",
+  "stopOnFailure": true,
+  "connectionSetId": "personal",
+  "vocabulary": {
+    "agentApp": "Service Console",
+    "supervisorSurface": "Command Center for Service",
+    "omniStatus": "Available",
+    "defaultQueue": "SCV Basic Queue",
+    "supportQueue": "Support Queue",
+    "entryNumber": "+18775145931"
+  },
+  "scenarios": [
+    {
+      "id": "inbound-agent-offer",
+      "description": "Preflight + CCP outbound dial into entry number + agent accepts call + VoiceCall assertions.",
+      "enabled": true,
+      "allowFailure": false,
+      "mergeVideo": true,
+      "requiresEnv": [],
+      "env": {
+        "CALL_TRIGGER_MODE": "connect_ccp",
+        "CALL_EXPECTATION": "agent_offer",
+        "CONNECT_CCP_IVR_MODE": "speech",
+        "VERIFY_SUPERVISOR_QUEUE_WAITING": "false",
+        "VERIFY_SUPERVISOR_AGENT_OFFER": "false",
+        "VOICE_RING_TIMEOUT_SEC": "${E2E_RING_TIMEOUT_SEC:-90}",
+        "CONNECT_CCP_IVR_DIGITS": "${E2E_BASELINE_DTMF:-}"
+      }
+    }
+  ]
+}

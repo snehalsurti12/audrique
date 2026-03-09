@@ -1,0 +1,85 @@
+{
+  "name": "Scenario 2 Only — IVR Support Queue",
+  "version": 2,
+  "stopOnFailure": false,
+  "connectionSetId": "personal",
+  "vocabulary": {
+    "agentApp": "Service Console",
+    "supervisorSurface": "Command Center for Service",
+    "omniStatus": "Available",
+    "defaultQueue": "SCV Basic Queue",
+    "supportQueue": "Support Queue",
+    "entryNumber": "+18775145931"
+  },
+  "defaults": {
+    "callTrigger": {
+      "mode": "connect_ccp",
+      "ivrMode": "speech"
+    },
+    "timeouts": {
+      "ringSec": 180,
+      "supervisorQueueSec": 180,
+      "supervisorAgentOfferSec": 180,
+      "offerAfterQueueSec": 180
+    }
+  },
+  "scenarios": [
+    {
+      "id": "ivr-support-queue-branch",
+      "description": "DTMF 1 routes to Support Queue — supervisor verifies queue routing.",
+      "allowFailure": false,
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "ivrLanguage": "en",
+        "ivrMaxPromptWaitSec": 15,
+        "ivrSteps": [
+          { "dtmf": "1", "expect": "press 1|support", "label": "Support Queue" }
+        ]
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "start_supervisor",
+          "queue": "Support Queue",
+          "observeAgentOffer": false,
+          "checkBeforeAccept": true
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "detect_incoming"
+        },
+        {
+          "action": "accept_call"
+        },
+        {
+          "action": "verify_screen_pop"
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.call_connected",
+          "equals": true
+        },
+        {
+          "type": "e2e.supervisor_queue_observed",
+          "queue": "Support Queue"
+        },
+        {
+          "type": "e2e.screen_pop_detected",
+          "equals": true
+        }
+      ],
+      "env": {
+        "SUPERVISOR_ALLOW_IN_PROGRESS_FALLBACK": "true"
+      },
+      "timeouts": {
+        "supervisorPostQueueHoldSec": 4,
+        "supervisorBeforeAcceptWaitMs": 7000
+      }
+    }
+  ]
+}

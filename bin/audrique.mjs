@@ -14,6 +14,7 @@
  *   audrique discover                Run org auto-discovery
  *   audrique merge                   Merge video recordings
  *   audrique highlight               Generate highlight reel
+ *   audrique ingest                  Backfill test results into PostgreSQL
  *   audrique help                    Show this help message
  */
 
@@ -62,6 +63,10 @@ const COMMANDS = {
   doctor: {
     desc: "Pre-flight check — validate tools, network, and credentials",
     usage: "audrique doctor",
+  },
+  ingest: {
+    desc: "Backfill existing test results into PostgreSQL",
+    usage: "audrique ingest [results-dir]",
   },
 };
 
@@ -243,6 +248,17 @@ switch (command) {
 
   case "doctor": {
     exec("scripts/doctor.mjs");
+    break;
+  }
+
+  case "ingest": {
+    const ingestArgs = positional.length > 0 ? positional : [];
+    const ingestChild = spawn("node", [path.join(ROOT, "scripts/ingest-results.mjs"), ...ingestArgs], {
+      cwd: ROOT,
+      env: process.env,
+      stdio: "inherit",
+    });
+    ingestChild.on("close", (code) => process.exit(code ?? 0));
     break;
   }
 

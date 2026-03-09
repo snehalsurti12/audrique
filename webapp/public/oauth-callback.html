@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audrique — Salesforce OAuth</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #1a1d2e;
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      border-radius: 12px;
+      padding: 2.5rem;
+      max-width: 420px;
+      width: 90%;
+      text-align: center;
+    }
+    .card h2 { font-size: 1.2rem; margin-bottom: 0.5rem; }
+    .card p { color: #94a3b8; font-size: 0.9rem; margin-top: 0.5rem; }
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid rgba(99, 102, 241, 0.2);
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 1.5rem auto 1rem;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .status-ok { color: #34d399; }
+    .status-fail { color: #f87171; }
+    .close-hint {
+      margin-top: 1.5rem;
+      font-size: 0.8rem;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2 id="title">Connecting to Salesforce...</h2>
+    <div class="spinner" id="spinner"></div>
+    <p id="message">Exchanging authorization code for session tokens.</p>
+    <p class="close-hint" id="close-hint" style="display: none;">You can close this window.</p>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state"); // profileId
+    const error = params.get("error");
+    const errorDesc = params.get("error_description");
+
+    const titleEl = document.getElementById("title");
+    const spinnerEl = document.getElementById("spinner");
+    const messageEl = document.getElementById("message");
+    const closeHintEl = document.getElementById("close-hint");
+
+    function showResult(ok, title, message) {
+      titleEl.textContent = title;
+      titleEl.className = ok ? "status-ok" : "status-fail";
+      messageEl.textContent = message;
+      spinnerEl.style.display = "none";
+      closeHintEl.style.display = "";
+    }
+
+    (async () => {
+      if (error) {
+        showResult(false, "Authorization Failed", errorDesc || error);
+        return;
+      }
+
+      if (!code) {
+        showResult(false, "No Authorization Code", "Salesforce did not return an authorization code.");
+        return;
+      }
+
+      try {
+        const resp = await fetch("/api/oauth/sf/callback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code, profileId: state }),
+        });
+        const result = await resp.json();
+
+        if (result.success) {
+          showResult(true, "Connected!", `Salesforce session created for ${result.instanceUrl || "your org"}.`);
+          // Notify the parent window (Studio) that OAuth completed
+          if (window.opener) {
+            window.opener.postMessage({ type: "sf-oauth-complete", profileId: state, success: true }, "*");
+          }
+        } else {
+          showResult(false, "Connection Failed", result.error || "Unknown error during token exchange.");
+          if (window.opener) {
+            window.opener.postMessage({ type: "sf-oauth-complete", profileId: state, success: false, error: result.error }, "*");
+          }
+        }
+      } catch (err) {
+        showResult(false, "Network Error", `Could not reach the Audrique server: ${err.message}`);
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+{
+  "name": "YouTube Demo Suite",
+  "version": 2,
+  "connectionSetId": "personal",
+  "stopOnFailure": false,
+  "defaults": {
+    "callTrigger": {
+      "mode": "connect_ccp"
+    },
+    "timeouts": {
+      "ringSec": 90,
+      "supervisorQueueSec": 90,
+      "supervisorAgentOfferSec": 90,
+      "offerAfterQueueSec": 120
+    }
+  },
+  "scenarios": [
+    {
+      "id": "ivr-support-queue-branch",
+      "description": "DTMF 1 routes to Support Queue — supervisor verifies queue + agent offer.",
+      "allowFailure": true,
+      "callTrigger": {
+        "mode": "connect_ccp",
+        "entryNumber": "+18775145931",
+        "ivrSteps": [
+          {
+            "dtmf": "1",
+            "label": "Support"
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "start_supervisor",
+          "queue": "Support Queue",
+          "observeAgentOffer": true,
+          "checkBeforeAccept": true
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "detect_incoming",
+          "timeoutSec": 120
+        },
+        {
+          "action": "accept_call"
+        },
+        {
+          "action": "verify_screen_pop"
+        }
+      ],
+      "expect": [
+        {
+          "type": "e2e.call_connected",
+          "equals": true
+        },
+        {
+          "type": "e2e.supervisor_queue_observed",
+          "queue": "Support Queue"
+        },
+        {
+          "type": "e2e.supervisor_agent_offer",
+          "equals": true
+        },
+        {
+          "type": "e2e.screen_pop_detected",
+          "equals": true
+        }
+      ],
+      "timeouts": {
+        "ringSec": 120,
+        "supervisorPostQueueHoldSec": 4
+      }
+    }
+  ]
+}
