@@ -48,7 +48,7 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -57,31 +57,49 @@
   <nav class="nav">
     <div class="nav-inner">
       <a href="/" class="nav-logo">
-        <img src="logo.png" alt="Audrique" width="32" height="32" />
+        <img src="logo.png" alt="Audrique" width="28" height="28" />
         <span>Audrique</span>
       </a>
       <div class="nav-links">
         <a href="#demo">Demo</a>
-        <a href="#features">Features</a>
+        <a href="#capabilities">Capabilities</a>
         <a href="#how-it-works">How It Works</a>
         <a href="#quickstart">Quick Start</a>
         <a href="#trial">Trial</a>
         <a href="https://github.com/snehalsurti12/audrique" class="btn-nav">GitHub</a>
       </div>
+      <button class="nav-mobile-toggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
     </div>
   </nav>
 
   <!-- ── Hero ── -->
   <section class="hero">
+    <div class="hero-glow"></div>
     <div class="hero-inner">
       <div class="hero-badge">Open Source &middot; MIT License</div>
-      <h1>End-to-End <span class="highlight">Voice Testing</span><br/>for Contact Centers &amp; AI Agents</h1>
+      <h1>End-to-End <span class="gradient-text">Voice Testing</span> for Contact Centers &amp; AI Agents</h1>
       <p class="hero-sub">
-        Test human agents, IVR routing, and AI agents like Agentforce &mdash; with real calls, real CRM verification, and real results. One framework that coordinates telephony, browser, and backend in a single test run.
+        Test human agents, IVR routing, and AI agents like Agentforce &mdash; with real calls, real CRM verification, and real results.
       </p>
       <div class="hero-actions">
         <a href="#trial" class="btn btn-primary">Request a Trial</a>
-        <a href="#demo" class="btn btn-secondary">Watch Demo</a>
+        <a href="#demo" class="btn btn-outline">Watch Demo</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Platform Bar ── -->
+  <section class="platform-bar">
+    <div class="container">
+      <p class="platform-label">Works with</p>
+      <div class="platform-list">
+        <span>Salesforce Service Cloud Voice</span>
+        <span class="platform-dot"></span>
+        <span>Amazon Connect</span>
+        <span class="platform-dot"></span>
+        <span>Twilio</span>
       </div>
     </div>
   </section>
@@ -89,13 +107,15 @@
   <!-- ── Demo Video ── -->
   <section id="demo" class="section">
     <div class="container">
-      <h2 class="section-title">See It In Action</h2>
-      <p class="section-sub">Build a test scenario from scratch and watch it execute a real voice call end-to-end.</p>
+      <div class="section-header">
+        <h2>See It In Action</h2>
+        <p>Build a test scenario from scratch and watch it execute a real voice call end-to-end.</p>
+      </div>
       <div class="video-wrap">
         <iframe
           width="100%" height="100%"
           src="https://www.youtube.com/embed/yukCm70mJ9s"
-          title="Audrique — End-to-End Voice Testing for Contact Centers & AI Agents"
+          title="Audrique — End-to-End Voice Testing Demo"
           frameborder="0"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowfullscreen>
@@ -104,112 +124,151 @@
     </div>
   </section>
 
-  <!-- ── Problem ── -->
-  <section class="section section-dark">
+  <!-- ── The Challenge ── -->
+  <section class="section">
     <div class="container">
-      <h2 class="section-title">The Problem</h2>
-      <p class="section-sub">Contact center voice testing is manual, slow, and siloed. Each tool covers one layer.</p>
-      <div class="grid-4">
-        <div class="problem-card">
-          <div class="problem-icon">UI</div>
-          <h3>UI Tools</h3>
-          <p>Test the CRM, but can't place real calls</p>
+      <div class="section-header">
+        <h2>Why Audrique?</h2>
+        <p>Existing tools test one layer at a time. A call connects, but nobody checks if the CRM updated. A UI test passes, but nobody verified the call actually rang. Audrique tests all three layers simultaneously.</p>
+      </div>
+      <div class="challenge-grid">
+        <div class="challenge-card challenge-before">
+          <div class="challenge-label">Without Audrique</div>
+          <ul>
+            <li>UI tools test the CRM, but can't place real calls</li>
+            <li>Telephony scripts make calls, but can't verify what agents see</li>
+            <li>API tools query records, but can't coordinate timing</li>
+            <li>Manual QA is expensive, slow, and non-reproducible</li>
+          </ul>
         </div>
-        <div class="problem-card">
-          <div class="problem-icon">TEL</div>
-          <h3>Telephony Scripts</h3>
-          <p>Make calls, but can't verify what the agent sees</p>
-        </div>
-        <div class="problem-card">
-          <div class="problem-icon">API</div>
-          <h3>API Tools</h3>
-          <p>Query records, but can't coordinate timing</p>
-        </div>
-        <div class="problem-card">
-          <div class="problem-icon">QA</div>
-          <h3>Manual QA</h3>
-          <p>Expensive, slow, and non-reproducible</p>
+        <div class="challenge-card challenge-after">
+          <div class="challenge-label">With Audrique</div>
+          <ul>
+            <li>One test places a real call and verifies the CRM simultaneously</li>
+            <li>Agent screen pops, call routing, and records validated in a single run</li>
+            <li>AI agent conversations tested with automated persona simulation</li>
+            <li>Reproducible, automated, with video evidence of every run</li>
+          </ul>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ── Features ── -->
-  <section id="features" class="section">
+  <!-- ── Capabilities ── -->
+  <section id="capabilities" class="section section-alt">
     <div class="container">
-      <h2 class="section-title">What Audrique Does</h2>
-      <p class="section-sub">One framework coordinates all three layers — because contact center bugs live at the boundaries.</p>
-      <div class="grid-3">
-        <div class="feature-card">
-          <div class="feature-num">1</div>
-          <h3>Visual Scenario Builder</h3>
-          <p>Build voice tests in a 7-step wizard. Configure IVR routing, supervisor monitoring, and assertions — no code required.</p>
+      <div class="section-header">
+        <h2>Capabilities</h2>
+        <p>One framework that coordinates telephony, CRM, and backend &mdash; because contact center bugs live at the boundaries.</p>
+      </div>
+      <div class="cap-grid">
+        <div class="cap-card">
+          <div class="cap-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+            </svg>
+          </div>
+          <h3>Real Call Automation</h3>
+          <p>Place and receive real voice calls through Amazon Connect and Twilio. Navigate IVR menus with speech detection and DTMF input.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-num">2</div>
-          <h3>Real Voice Calls</h3>
-          <p>Places actual outbound calls through Amazon Connect + Twilio. Navigates IVR menus with speech detection and DTMF.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-num">3</div>
+        <div class="cap-card">
+          <div class="cap-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          </div>
           <h3>CRM Verification</h3>
-          <p>Verifies the Salesforce agent sees the right screen pop, call type, and VoiceCall record — all via Playwright.</p>
+          <p>Verify that Salesforce agents see the correct screen pop, call type, and VoiceCall record &mdash; all in real time via Playwright.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-num">4</div>
-          <h3>Supervisor Monitoring</h3>
-          <p>Opens Command Center, monitors Queue Backlog and In-Progress Work tabs. Detects call routing in real time.</p>
+        <div class="cap-card">
+          <div class="cap-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4z"/><path d="M16 14h.01"/><path d="M8 14h.01"/><path d="M12 17v1"/><rect x="4" y="12" width="16" height="9" rx="2"/>
+            </svg>
+          </div>
+          <h3>AI Agent Validation</h3>
+          <p>Test Agentforce and other AI agents with LLM-driven persona simulation. Validate topic routing, actions, and resolution flows.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-num">5</div>
-          <h3>Three Video Streams</h3>
-          <p>Records agent, CCP, and supervisor screens simultaneously. Generates timeline-synced video evidence.</p>
+        <div class="cap-card">
+          <div class="cap-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+            </svg>
+          </div>
+          <h3>No-Code Scenario Builder</h3>
+          <p>Build voice test scenarios in a visual 7-step wizard. Configure call routing, supervisor monitoring, and assertions without writing code.</p>
         </div>
-        <div class="feature-card">
-          <div class="feature-num">6</div>
-          <h3>Session Management</h3>
-          <p>Federation API auth for Connect CCP — no SAML login. Auto-refresh expired sessions before each run.</p>
+        <div class="cap-card">
+          <div class="cap-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+          </div>
+          <h3>Video Evidence</h3>
+          <p>Record agent, CCP, and supervisor screens simultaneously. Generate timeline-synced video evidence for every test run.</p>
+        </div>
+        <div class="cap-card">
+          <div class="cap-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+            </svg>
+          </div>
+          <h3>Results Dashboard</h3>
+          <p>Track test run history, failure diagnostics, and pass-rate trends in a built-in web dashboard with PostgreSQL-backed storage.</p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- ── How It Works ── -->
-  <section id="how-it-works" class="section section-dark">
+  <section id="how-it-works" class="section">
     <div class="container">
-      <h2 class="section-title">How It Works</h2>
-      <p class="section-sub">Three parallel streams coordinated by a single test scenario.</p>
-      <div class="call-flow">
+      <div class="section-header">
+        <h2>How It Works</h2>
+        <p>Three parallel streams coordinated by a single test scenario.</p>
+      </div>
+      <div class="flow">
         <div class="flow-step">
-          <div class="flow-marker agent">SF</div>
-          <div class="flow-content">
-            <div class="flow-label">Agent Stream</div>
-            <h3>Salesforce Lightning &mdash; Playwright</h3>
-            <p>Login to Omni-Channel, sync telephony provider, wait for incoming call offer, accept, verify VoiceCall screen pop.</p>
+          <div class="flow-marker flow-marker-cyan">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          </div>
+          <div class="flow-connector"></div>
+          <div class="flow-body">
+            <span class="flow-tag">Agent Stream</span>
+            <h3>Salesforce Lightning</h3>
+            <p>Log in to Omni-Channel, sync telephony, accept incoming call, verify VoiceCall screen pop and record fields.</p>
           </div>
         </div>
         <div class="flow-step">
-          <div class="flow-marker ccp">CCP</div>
-          <div class="flow-content">
-            <div class="flow-label">CCP Stream</div>
-            <h3>Amazon Connect CCP &mdash; Playwright</h3>
-            <p>Load CCP with federation token cookies. Place outbound call via Twilio. Navigate IVR with speech detection and DTMF digits.</p>
+          <div class="flow-marker flow-marker-violet">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.362 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+          </div>
+          <div class="flow-connector"></div>
+          <div class="flow-body">
+            <span class="flow-tag">Caller Stream</span>
+            <h3>Amazon Connect + Twilio</h3>
+            <p>Place outbound call via Twilio, navigate IVR with DTMF or speech, or simulate AI-driven customer conversation.</p>
           </div>
         </div>
         <div class="flow-step">
-          <div class="flow-marker sup">SUP</div>
-          <div class="flow-content">
-            <div class="flow-label">Supervisor Stream</div>
-            <h3>Command Center &mdash; Playwright</h3>
-            <p>Open Queue Backlog + In-Progress Work tabs. Poll both in parallel. Detect call routing to target queue.</p>
+          <div class="flow-marker flow-marker-amber">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          </div>
+          <div class="flow-connector"></div>
+          <div class="flow-body">
+            <span class="flow-tag">Supervisor Stream</span>
+            <h3>Command Center</h3>
+            <p>Monitor Queue Backlog and In-Progress Work tabs in real time. Detect call routing to the target queue and agent.</p>
           </div>
         </div>
         <div class="flow-step">
-          <div class="flow-marker agent" style="background: rgba(52, 211, 153, 0.12); color: #34d399; border-color: rgba(52, 211, 153, 0.3);">REC</div>
-          <div class="flow-content">
-            <div class="flow-label">Evidence</div>
-            <h3>Three Parallel Video Recordings</h3>
-            <p>All streams record simultaneously. Timeline timestamps synchronize the recordings into a single evidence video.</p>
+          <div class="flow-marker flow-marker-green">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          </div>
+          <div class="flow-body">
+            <span class="flow-tag">Evidence</span>
+            <h3>Synchronized Recordings</h3>
+            <p>All streams record simultaneously. Timeline-synced video evidence, assertions, and full conversation transcripts.</p>
           </div>
         </div>
       </div>
@@ -217,12 +276,17 @@
   </section>
 
   <!-- ── Quick Start ── -->
-  <section id="quickstart" class="section">
+  <section id="quickstart" class="section section-alt">
     <div class="container">
-      <h2 class="section-title">Quick Start</h2>
-      <p class="section-sub">Up and running in under 5 minutes.</p>
+      <div class="section-header">
+        <h2>Quick Start</h2>
+        <p>Up and running in under 5 minutes.</p>
+      </div>
       <div class="code-block">
-        <div class="code-header">Terminal</div>
+        <div class="code-header">
+          <div class="code-dots"><span></span><span></span><span></span></div>
+          <span>Terminal</span>
+        </div>
         <pre><code><span class="code-comment"># Clone the repo</span>
 git clone https://github.com/snehalsurti12/audrique.git
 cd audrique
@@ -240,35 +304,43 @@ npm run studio
   </section>
 
   <!-- ── Roadmap ── -->
-  <section class="section section-dark">
+  <section class="section">
     <div class="container">
-      <h2 class="section-title">Roadmap</h2>
-      <div class="grid-2">
-        <div class="roadmap-card">
+      <div class="section-header">
+        <h2>Roadmap</h2>
+      </div>
+      <div class="roadmap-grid">
+        <div class="roadmap-card shipped">
+          <div class="roadmap-status">Shipped in v0.6</div>
           <h3>NL Caller</h3>
-          <p>AI-to-AI voice testing. LLM-driven customer simulates calls against Salesforce Agentforce.</p>
+          <p>AI-to-AI voice testing. LLM-driven caller simulates customer conversations against Agentforce.</p>
+        </div>
+        <div class="roadmap-card shipped">
+          <div class="roadmap-status">Shipped in v0.7</div>
+          <h3>Results Dashboard</h3>
+          <p>PostgreSQL-backed test history, error diagnostics, and pass-rate trends.</p>
         </div>
         <div class="roadmap-card">
+          <div class="roadmap-status upcoming">Upcoming</div>
           <h3>Pluggable Dialers</h3>
-          <p>Twilio, Vonage, Amazon Connect — swap telephony providers via config.</p>
+          <p>Swap telephony providers via config &mdash; Twilio, Vonage, or native Amazon Connect.</p>
         </div>
         <div class="roadmap-card">
+          <div class="roadmap-status upcoming">Upcoming</div>
           <h3>Parallel Load Testing</h3>
-          <p>40-50+ simultaneous calls via agent pool federation.</p>
-        </div>
-        <div class="roadmap-card">
-          <h3>Multi-Platform</h3>
-          <p>ServiceNow, Zendesk, Genesys — same scenario DSL, different CRM.</p>
+          <p>40-50+ simultaneous calls via agent pool federation for capacity and routing validation.</p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- ── Trial Form ── -->
-  <section id="trial" class="section">
+  <section id="trial" class="section section-alt">
     <div class="container">
-      <h2 class="section-title">Request a Trial</h2>
-      <p class="section-sub">Interested in testing Audrique with your contact center? Drop your details and we'll reach out.</p>
+      <div class="section-header">
+        <h2>Request a Trial</h2>
+        <p>Interested in testing Audrique with your contact center? Drop your details and we'll reach out.</p>
+      </div>
       <form class="trial-form" id="trial-form" action="https://formspree.io/f/xojkjjqo" method="POST">
         <div class="form-grid">
           <div class="form-group">
@@ -292,7 +364,7 @@ npm run studio
         <button type="submit" class="btn btn-primary trial-submit">Request Trial</button>
       </form>
       <div class="trial-success hidden" id="trial-success">
-        <div class="success-icon">&#10003;</div>
+        <div class="success-check">&#10003;</div>
         <h3>Thanks for your interest!</h3>
         <p>We'll reach out shortly to set up your trial.</p>
       </div>
@@ -301,14 +373,13 @@ npm run studio
 
   <!-- ── CTA ── -->
   <section class="section cta-section">
-    <div class="container" style="text-align: center;">
-      <img src="logo.png" alt="Audrique" width="80" height="80" style="margin-bottom: 1.5rem;" />
+    <div class="cta-glow"></div>
+    <div class="container cta-inner">
       <h2>Start Testing Voice Workflows Today</h2>
-      <p class="section-sub">Open source. MIT licensed. No vendor lock-in.</p>
-      <div class="hero-actions">
+      <p>Open source. MIT licensed. No vendor lock-in.</p>
+      <div class="cta-actions">
         <a href="#trial" class="btn btn-primary">Request a Trial</a>
-        <a href="https://github.com/snehalsurti12/audrique" class="btn btn-secondary">View on GitHub</a>
-        <a href="https://www.youtube.com/watch?v=yukCm70mJ9s" class="btn btn-secondary">Watch Demo</a>
+        <a href="https://github.com/snehalsurti12/audrique" class="btn btn-outline">View on GitHub</a>
       </div>
     </div>
   </section>
@@ -316,7 +387,10 @@ npm run studio
   <!-- ── Footer ── -->
   <footer class="footer">
     <div class="container footer-inner">
-      <p>&copy; 2026 Audrique. Open-source under MIT License.</p>
+      <div class="footer-brand">
+        <img src="logo.png" alt="Audrique" width="24" height="24" />
+        <span>&copy; 2026 Audrique</span>
+      </div>
       <div class="footer-links">
         <a href="https://github.com/snehalsurti12/audrique">GitHub</a>
         <a href="https://www.youtube.com/watch?v=yukCm70mJ9s">YouTube</a>
@@ -325,6 +399,13 @@ npm run studio
   </footer>
 
   <script>
+    // Mobile nav toggle
+    document.querySelector('.nav-mobile-toggle')?.addEventListener('click', function() {
+      document.querySelector('.nav-links')?.classList.toggle('nav-open');
+      this.classList.toggle('active');
+    });
+
+    // Trial form
     document.getElementById('trial-form')?.addEventListener('submit', async function(e) {
       e.preventDefault();
       const form = e.target;
