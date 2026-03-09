@@ -65,6 +65,7 @@
         <a href="#features">Features</a>
         <a href="#how-it-works">How It Works</a>
         <a href="#quickstart">Quick Start</a>
+        <a href="#trial">Trial</a>
         <a href="https://github.com/snehalsurti12/audrique" class="btn-nav">GitHub</a>
       </div>
     </div>
@@ -80,7 +81,7 @@
         The first open-source tool that tests across telephony, CRM UI, and backend records simultaneously.
       </p>
       <div class="hero-actions">
-        <a href="https://github.com/snehalsurti12/audrique" class="btn btn-primary">Get Started</a>
+        <a href="#trial" class="btn btn-primary">Request a Trial</a>
         <a href="#demo" class="btn btn-secondary">Watch Demo</a>
       </div>
       <div class="hero-tech">
@@ -271,6 +272,41 @@ npm run studio
     </div>
   </section>
 
+  <!-- ── Trial Form ── -->
+  <section id="trial" class="section">
+    <div class="container">
+      <h2 class="section-title">Request a Trial</h2>
+      <p class="section-sub">Interested in testing Audrique with your contact center? Drop your details and we'll reach out.</p>
+      <form class="trial-form" id="trial-form" action="https://formspree.io/f/xojkjjqo" method="POST">
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="trial-name">Name</label>
+            <input type="text" id="trial-name" name="name" required placeholder="Jane Doe" />
+          </div>
+          <div class="form-group">
+            <label for="trial-email">Work Email</label>
+            <input type="email" id="trial-email" name="email" required placeholder="jane@company.com" />
+          </div>
+          <div class="form-group">
+            <label for="trial-company">Company</label>
+            <input type="text" id="trial-company" name="company" required placeholder="Acme Corp" />
+          </div>
+          <div class="form-group">
+            <label for="trial-role">Role</label>
+            <input type="text" id="trial-role" name="role" placeholder="QA Lead / DevOps / Admin" />
+          </div>
+        </div>
+        <input type="text" name="_gotcha" style="display:none" />
+        <button type="submit" class="btn btn-primary trial-submit">Request Trial</button>
+      </form>
+      <div class="trial-success hidden" id="trial-success">
+        <div class="success-icon">&#10003;</div>
+        <h3>Thanks for your interest!</h3>
+        <p>We'll reach out shortly to set up your trial.</p>
+      </div>
+    </div>
+  </section>
+
   <!-- ── CTA ── -->
   <section class="section cta-section">
     <div class="container" style="text-align: center;">
@@ -278,7 +314,8 @@ npm run studio
       <h2>Start Testing Voice Workflows Today</h2>
       <p class="section-sub">Open source. MIT licensed. No vendor lock-in.</p>
       <div class="hero-actions">
-        <a href="https://github.com/snehalsurti12/audrique" class="btn btn-primary">View on GitHub</a>
+        <a href="#trial" class="btn btn-primary">Request a Trial</a>
+        <a href="https://github.com/snehalsurti12/audrique" class="btn btn-secondary">View on GitHub</a>
         <a href="https://www.youtube.com/watch?v=yukCm70mJ9s" class="btn btn-secondary">Watch Demo</a>
       </div>
     </div>
@@ -294,6 +331,33 @@ npm run studio
       </div>
     </div>
   </footer>
+
+  <script>
+    document.getElementById('trial-form')?.addEventListener('submit', async function(e) {
+      e.preventDefault();
+      const form = e.target;
+      const btn = form.querySelector('.trial-submit');
+      btn.textContent = 'Sending...';
+      btn.disabled = true;
+      try {
+        const res = await fetch(form.action, {
+          method: 'POST',
+          body: new FormData(form),
+          headers: { 'Accept': 'application/json' }
+        });
+        if (res.ok) {
+          form.classList.add('hidden');
+          document.getElementById('trial-success')?.classList.remove('hidden');
+        } else {
+          btn.textContent = 'Something went wrong. Try again.';
+          btn.disabled = false;
+        }
+      } catch {
+        btn.textContent = 'Network error. Try again.';
+        btn.disabled = false;
+      }
+    });
+  </script>
 
 </body>
 </html>

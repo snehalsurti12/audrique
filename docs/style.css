@@ -310,6 +310,92 @@ a:hover { color: var(--text-primary); }
 .footer-links a { color: var(--text-muted); font-size: 0.8rem; }
 .footer-links a:hover { color: var(--cyan); }
 
+/* ── Trial Form ── */
+.trial-form {
+  max-width: 600px;
+  margin: 0 auto;
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.form-group label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+}
+.form-group input {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.65rem 0.9rem;
+  color: var(--text-primary);
+  font-family: 'Inter', sans-serif;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.form-group input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+.form-group input:focus {
+  border-color: var(--cyan-dim);
+  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.1);
+}
+.trial-submit {
+  width: 100%;
+  padding: 0.75rem;
+  font-size: 0.95rem;
+  cursor: pointer;
+  border: none;
+}
+.trial-submit:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+/* Success state */
+.trial-success {
+  max-width: 600px;
+  margin: 0 auto;
+  text-align: center;
+  padding: 2.5rem 1rem;
+}
+.trial-success .success-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(6, 182, 212, 0.12);
+  color: var(--cyan);
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(6, 182, 212, 0.3);
+}
+.trial-success h3 {
+  font-size: 1.25rem;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary);
+}
+.trial-success p {
+  color: var(--text-secondary);
+  font-size: 0.95rem;
+}
+.hidden { display: none !important; }
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .nav-links a:not(.btn-nav) { display: none; }
@@ -318,4 +404,5 @@ a:hover { color: var(--text-primary); }
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
   .footer-inner { flex-direction: column; gap: 0.75rem; text-align: center; }
   .flow-step { flex-direction: column; gap: 0.75rem; }
+  .form-grid { grid-template-columns: 1fr; }
 }
