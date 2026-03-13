@@ -1829,6 +1829,19 @@ body {
   align-items: center;
   gap: 6px;
 }
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.user-name {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .top-divider {
   width: 1px;
@@ -2768,4 +2781,87 @@ details.discover-section > summary:hover {
 
 .supervisor-obs-container {
   padding: 8px 0;
+}
+
+/* ── Viewer Read-Only Mode ─────────────────────────────────────────── */
+
+.viewer-readonly .wizard input,
+.viewer-readonly .wizard select,
+.viewer-readonly .wizard textarea {
+  pointer-events: none;
+  opacity: 0.7;
+}
+.viewer-readonly .wizard .wizard-card-option {
+  pointer-events: none;
+}
+.viewer-readonly .wizard .step-add-btn,
+.viewer-readonly .wizard .step-remove-btn {
+  display: none;
+}
+
+/* ── Connection Form — Clean Sections ────────────────────────────── */
+
+.vault-active-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 25%, transparent);
+  border-radius: 6px;
+  padding: 6px 12px;
+  margin-bottom: 16px;
+}
+
+.conn-section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.conn-section-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 14px;
+}
+
+.conn-section-collapsible {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.conn-section-collapsible > summary.conn-section-header {
+  padding: 12px 16px;
+  margin: 0;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.conn-section-collapsible > summary.conn-section-header::before {
+  content: "\25B6";
+  font-size: 9px;
+  display: inline-block;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.conn-section-collapsible[open] > summary.conn-section-header::before {
+  transform: rotate(90deg);
+}
+
+.conn-section-body {
+  padding: 0 16px 16px;
 }

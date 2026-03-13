@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audrique Studio — Login</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #1a1d2e;
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      border-radius: 12px;
+      padding: 2.5rem;
+      max-width: 400px;
+      width: 90%;
+    }
+    .card h2 {
+      font-size: 1.3rem;
+      margin-bottom: 0.3rem;
+      text-align: center;
+    }
+    .card .subtitle {
+      color: #94a3b8;
+      font-size: 0.85rem;
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+    .form-group { margin-bottom: 1rem; }
+    .form-group label {
+      display: block;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #94a3b8;
+      margin-bottom: 0.3rem;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      background: #0f1117;
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      border-radius: 8px;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    }
+    .btn-submit {
+      width: 100%;
+      padding: 0.7rem;
+      background: linear-gradient(135deg, #6366f1, #818cf8);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 0.5rem;
+      font-family: inherit;
+      transition: opacity 0.2s;
+    }
+    .btn-submit:hover { opacity: 0.9; }
+    .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .error-msg {
+      background: rgba(248, 113, 113, 0.1);
+      border: 1px solid rgba(248, 113, 113, 0.3);
+      color: #f87171;
+      padding: 0.6rem 0.8rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+      display: none;
+    }
+    .links {
+      margin-top: 1.2rem;
+      text-align: center;
+      font-size: 0.8rem;
+      color: #64748b;
+    }
+    .links a {
+      color: #818cf8;
+      text-decoration: none;
+    }
+    .links a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Audrique Studio</h2>
+    <p class="subtitle">Sign in to your account</p>
+
+    <div class="error-msg" id="error"></div>
+
+    <form id="login-form">
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" required autocomplete="email" placeholder="you@company.com" />
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autocomplete="current-password" placeholder="Enter your password" />
+      </div>
+      <button type="submit" class="btn-submit" id="btn-submit">Sign In</button>
+    </form>
+
+    <div class="links">
+      <a href="/forgot-password.html">Forgot password?</a>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById("login-form");
+    const errorEl = document.getElementById("error");
+    const btn = document.getElementById("btn-submit");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorEl.style.display = "none";
+      btn.disabled = true;
+      btn.textContent = "Signing in...";
+
+      try {
+        const resp = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            email: document.getElementById("email").value.trim(),
+            password: document.getElementById("password").value,
+          }),
+        });
+
+        const data = await resp.json();
+
+        if (resp.ok && data.accessToken) {
+          // Store access token in sessionStorage for the SPA to pick up
+          sessionStorage.setItem("audrique_access_token", data.accessToken);
+          sessionStorage.setItem("audrique_user", JSON.stringify(data.user));
+          window.location.href = "/";
+        } else {
+          errorEl.textContent = data.error || "Login failed";
+          errorEl.style.display = "block";
+        }
+      } catch (err) {
+        errorEl.textContent = "Network error. Please try again.";
+        errorEl.style.display = "block";
+      }
+
+      btn.disabled = false;
+      btn.textContent = "Sign In";
+    });
+  </script>
+</body>
+</html>

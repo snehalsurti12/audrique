@@ -98,6 +98,42 @@ export function createConversationEngine(opts) {
   let silenceTimer = null;
   let audioBuffer = Buffer.alloc(0);
 
+  // Gemini setup gate — audio arriving before setupComplete is buffered here so
+  // Gemini hears the full call stream from the very beginning, not mid-sentence.
+  let geminiReady = false;
+  let pendingAudioChunks = []; // base64 PCM chunks waiting for setupComplete
+
+  // Gemini transcription accumulators — buffer word fragments until turnComplete
+  let inputTranscriptBuffer = "";
+  let outputTranscriptBuffer = "";
+
+  // Turn silence detection — nudge Gemini if no turnComplete fires within turnTimeoutSec
+  let lastTurnCompleteMs = 0;
+  let turnNudgeTimer = null;
+
+  function scheduleTurnNudge() {
+    if (turnNudgeTimer) clearTimeout(turnNudgeTimer);
+    const timeoutMs = turnTimeoutSec * 1000;
+    turnNudgeTimer = setTimeout(() => {
+      if (state !== "listening") return;
+      if (!geminiWs || geminiWs.readyState !== 1 /* WebSocket.OPEN */) return;
+      logger.log(`[engine] No turn in ${turnTimeoutSec}s — nudging Gemini to respond`);
+      // Inject a text turn so Gemini generates a response — it may not have detected
+      // a clear turn boundary from the inbound audio stream.
+      geminiWs.send(JSON.stringify({
+        clientContent: {
+          turns: [{
+            role: "user",
+            parts: [{ text: "[There has been silence. If you have not yet spoken on this call, say hello and briefly explain why you are calling — stay in character. If you have already introduced yourself, say something brief like 'Hello? Are you there?' to prompt the agent.]" }],
+          }],
+          turnComplete: true,
+        },
+      }));
+      // Reschedule in case the nudge doesn't produce a response either
+      scheduleTurnNudge();
+    }, timeoutMs);
+  }
+
   // Local audio recording buffers (PCM 8kHz for both sides)
   const recordingBuffers = { inbound: [], outbound: [] };
 
@@ -115,11 +151,17 @@ export function createConversationEngine(opts) {
 
   async function onCallStarted({ streamSid, callSid }) {
     callStartedAt = Date.now();
-    state = "waiting_for_greeting";
-    logger.log(`[engine] Call started (mode=${mode}) — waiting for Agentforce greeting`);
+    lastTurnCompleteMs = Date.now();
+    // Start in listening — Gemini hears everything from the beginning of the call.
+    // The system prompt instructs it to stay silent during automated announcements
+    // and respond once a live agent or AI greets it directly. Gemini's LLM intelligence
+    // handles the IVR vs. conversation distinction from the audio itself.
+    state = "listening";
+    logger.log(`[engine] Call started (mode=${mode}) — Gemini connected, listening from call start`);
 
     if (mode === "gemini") {
       await connectGeminiLive();
+      scheduleTurnNudge();
     }
   }
 
@@ -129,7 +171,7 @@ export function createConversationEngine(opts) {
   let lastAudioLogMs = 0;
 
   async function onAudioIn(base64Mulaw) {
-    if (state === "idle" || state === "ended") return;
+    if (state === "idle" || state === "ended" || state === "escalation_hold") return;
 
     audioInCount++;
     // Log audio flow every 15 seconds
@@ -144,17 +186,24 @@ export function createConversationEngine(opts) {
     const pcm8k = mulawToPcm(mulawBuf);
     recordingBuffers.inbound.push(pcm8k);
 
-    if (mode === "gemini" && geminiWs?.readyState === WebSocket.OPEN) {
-      // Forward audio to Gemini Live API (convert mulaw 8kHz → PCM 16kHz)
+    if (mode === "gemini") {
+      // Convert mulaw 8kHz → PCM 16kHz base64 for Gemini
       const pcmBase64 = twilioToGeminiBase64(base64Mulaw);
-      geminiWs.send(JSON.stringify({
-        realtimeInput: {
-          mediaChunks: [{
-            mimeType: "audio/pcm;rate=16000",
-            data: pcmBase64,
-          }],
-        },
-      }));
+      if (!geminiReady) {
+        // Buffer audio that arrives before Gemini setup is complete.
+        // This prevents the first seconds of the call from being silently dropped
+        // during the WebSocket connection + setup handshake.
+        pendingAudioChunks.push(pcmBase64);
+      } else if (geminiWs?.readyState === WebSocket.OPEN) {
+        // Gemini is ready — forward directly.
+        // System prompt instructs it to stay silent during IVR announcements
+        // and respond only when greeted directly by an agent.
+        geminiWs.send(JSON.stringify({
+          realtimeInput: {
+            mediaChunks: [{ mimeType: "audio/pcm;rate=16000", data: pcmBase64 }],
+          },
+        }));
+      }
     } else if (mode === "scripted" || mode === "local") {
       // Buffer audio for local STT processing
       const pcm = twilioToGeminiInput(base64Mulaw);
@@ -171,9 +220,18 @@ export function createConversationEngine(opts) {
   }
 
   async function onCallEnded({ reason }) {
+    // During escalation_hold, ignore external close events (twilio-stop, ws-close).
+    // The 60s hold timer will call onCallEnded({reason:"escalation"}) when ready.
+    if (state === "escalation_hold" && reason !== "escalation") {
+      logger.log(`[engine] Ignoring onCallEnded(${reason}) during escalation_hold — waiting for hold timer`);
+      return;
+    }
     if (state === "ended") return;
     callEndedAt = Date.now();
     state = "ended";
+    geminiReady = false;
+    pendingAudioChunks = [];
+    if (turnNudgeTimer) { clearTimeout(turnNudgeTimer); turnNudgeTimer = null; }
     logger.log(`[engine] Call ended (reason=${reason})`);
 
     // Close Gemini connection
@@ -212,6 +270,7 @@ export function createConversationEngine(opts) {
       turnCount,
       durationSec: Math.round((callEndedAt - callStartedAt) / 1000),
       recordings,
+      reason,
     });
   }
 
@@ -249,6 +308,23 @@ export function createConversationEngine(opts) {
               },
             },
           },
+          // VAD tuning: wait for a longer silence window before treating inbound audio
+          // as a complete agent turn. Agentforce typically delivers multi-sentence messages
+          // (disclaimer + greeting in one block) with brief pauses between sentences (~400-700ms).
+          // A 400ms window + HIGH sensitivity incorrectly cuts the turn after the disclaimer,
+          // causing Gemini to respond before the greeting is heard. 1200ms + LOW sensitivity
+          // lets the full message arrive before Gemini decides to speak.
+          realtimeInputConfig: {
+            automaticActivityDetection: {
+              disabled: false,
+              endOfSpeechSensitivity: gemini.vadSensitivity === "high" ? "END_SENSITIVITY_HIGH" : "END_SENSITIVITY_LOW",
+              silenceDurationMs: gemini.vadSilenceDurationMs ?? 1200,
+            },
+          },
+          // Transcribe what Agentforce says (input audio) — required for escalation detection
+          inputAudioTranscription: {},
+          // Transcribe what Gemini says (output audio) — gives clean speech, not reasoning text
+          outputAudioTranscription: {},
           systemInstruction: {
             parts: [{
               text: buildSystemPrompt(),
@@ -288,10 +364,15 @@ export function createConversationEngine(opts) {
   }
 
   function handleGeminiMessage(msg) {
-    // Setup complete
+    // Setup complete — Gemini is now ready to receive audio
     if (msg.setupComplete) {
-      logger.log("[engine] Gemini session setup complete");
-      state = "listening";
+      geminiReady = true;
+      const buffered = pendingAudioChunks.length;
+      // Discard pre-setup buffered audio — sending it causes Gemini code=1007
+      // "Request contains an invalid argument". Gemini starts fresh and receives
+      // live call audio from this point via onAudioIn.
+      pendingAudioChunks = [];
+      logger.log(`[engine] Gemini session setup complete — discarded ${buffered} pre-setup chunks, listening live`);
       return;
     }
 
@@ -315,35 +396,71 @@ export function createConversationEngine(opts) {
             twilioSender.sendAudio(twilioAudio);
           }
         }
+        // part.text is Gemini reasoning/thinking — skip entirely when outputAudioTranscription
+        // is enabled. We use outputTranscription for clean caller speech instead.
+      }
 
-        // Text transcript of what Gemini said (caller side)
-        if (part.text) {
-          logger.log(`[engine] Caller says: "${part.text}"`);
+      // Accumulate output transcription fragments (Gemini speaks word-by-word)
+      const outputTranscription = msg.serverContent.outputTranscription;
+      if (outputTranscription?.text) {
+        outputTranscriptBuffer += outputTranscription.text;
+      }
+
+      // Accumulate input transcription fragments (Agentforce speaks word-by-word)
+      const inputTranscript = msg.serverContent.inputTranscription?.text || msg.serverContent.inputTranscript;
+      if (inputTranscript) {
+        inputTranscriptBuffer += inputTranscript;
+      }
+
+      // Flush buffers on turn complete — write full utterances to transcript
+      if (msg.serverContent.turnComplete) {
+        lastTurnCompleteMs = Date.now();
+        scheduleTurnNudge(); // reset silence timer on each turn
+        const callerText = outputTranscriptBuffer.trim();
+        const agentText = inputTranscriptBuffer.trim();
+        outputTranscriptBuffer = "";
+        inputTranscriptBuffer = "";
+
+        if (callerText) {
+          logger.log(`[engine] Caller says: "${callerText}"`);
           transcript.push({
             speaker: "caller",
-            text: part.text,
+            text: callerText,
             timestamp: Date.now(),
             turn: turnCount,
           });
           turnCount++;
         }
-      }
 
-      // Input transcript (what Agentforce said, transcribed by Gemini)
-      const inputTranscript = msg.serverContent.inputTranscript;
-      if (inputTranscript) {
-        logger.log(`[engine] Agentforce says: "${inputTranscript}"`);
-        transcript.push({
-          speaker: "agentforce",
-          text: inputTranscript,
-          timestamp: Date.now(),
-          turn: turnCount,
-        });
-      }
+        if (agentText) {
+          logger.log(`[engine] Agentforce says: "${agentText}"`);
+          transcript.push({
+            speaker: "agentforce",
+            text: agentText,
+            timestamp: Date.now(),
+            turn: turnCount,
+          });
+        }
 
-      // Check if turn is complete
-      if (msg.serverContent.turnComplete) {
         logger.log(`[engine] Turn ${turnCount} complete`);
+
+        // Detect escalation phrases in transcript — annotation only.
+        // Actual escalation is triggered externally via notifyEscalation() when
+        // the Salesforce OmniChannel incoming signal fires. This avoids false
+        // positives from IVR announcements and hold messages.
+        const escalationPhrases = [
+          "transfer", "transferring", "connect you with", "connect you to",
+          "specialist", "human agent", "live agent", "representative",
+          "hold while i", "please hold", "one moment"
+        ];
+        const lastAgentforceTurn = [...transcript].reverse().find(t => t.speaker === "agentforce");
+        if (lastAgentforceTurn) {
+          const lowerText = lastAgentforceTurn.text.toLowerCase();
+          const isEscalating = escalationPhrases.some(phrase => lowerText.includes(phrase));
+          if (isEscalating) {
+            logger.log(`[engine] Escalation phrase detected in transcript (informational): "${lastAgentforceTurn.text}" — waiting for SF OmniChannel event via notifyEscalation()`);
+          }
+        }
 
         // Check max turns
         if (turnCount >= maxTurns) {
@@ -498,14 +615,28 @@ Persona: ${persona.name || "Customer"}${persona.accountNumber ? `, account ${per
 Context: ${persona.context || "General inquiry"}
 Objective: ${persona.objective || "Get help with an issue"}
 
-Rules:
-- Stay in character. Be natural and conversational.
-- Do not reveal you are an AI.
-- Keep responses concise (1-3 sentences, as spoken language).
-- Provide information only when asked by the agent.
-- If the agent resolves your issue, thank them and say goodbye.
-- If the agent asks you to hold, say "okay" and wait.
-- If you don't understand, ask the agent to repeat.`;
+You are on a live phone call. Use your judgment — the same way a real person would — to decide when to speak and when to stay silent.
+
+WHEN TO STAY SILENT:
+- The other party is delivering information that does not expect a response from you (legal notices, hold messages, system announcements, music, being transferred).
+- The other party is still speaking.
+
+WHEN TO SPEAK:
+- The other party has finished speaking and is clearly expecting you to respond. Judge this by the intent and tone of what was said — did it open the floor to you? Did it ask you something? Did it greet you in a way that expects a reply?
+- This applies regardless of what else was said before it. A message can start with a disclaimer and end with a greeting — respond to the greeting.
+- Any request for information (your name, account, reason for calling, verification) — answer it.
+
+IF THERE IS SILENCE:
+- Do not speak just because it is quiet. First consider: is the agent processing? Am I on hold? Or is the agent genuinely waiting for me?
+- If the agent has already spoken to you and silence follows with no clear reason, it is appropriate to re-engage briefly.
+
+CONVERSATION FLOW:
+- When you first get to speak: introduce yourself and explain your issue. Do not jump straight to demanding escalation — have a natural conversation first.
+- Only ask to speak with a human after giving the agent a fair chance to help (at least 2-3 exchanges).
+- If being transferred: acknowledge and wait.
+- If issue is resolved: thank them and say goodbye.
+
+Be natural. Keep responses short (1-3 spoken sentences). Do not reveal you are an AI.`;
 
     if (tone && TONE_PROMPTS[tone]) {
       prompt += `\n\nEmotional tone: ${TONE_PROMPTS[tone]}`;
@@ -514,6 +645,64 @@ Rules:
       prompt += `\n\nAccent: ${ACCENT_PROMPTS[accent]}`;
     }
     return prompt;
+  }
+
+  /**
+   * Called externally when the Agentforce AI agent has answered the call
+   * (detected via SF Agentforce supervisor tab: totalActive >= 1).
+   * Transitions from waiting_for_ai → listening, enabling audio forwarding to Gemini.
+   */
+  function startConversation() {
+    // Informational signal from the Agentforce supervisor tab (totalActive >= 1).
+    // Audio forwarding is always on from call start — Gemini handles IVR vs. conversation
+    // distinction using its system prompt. This call is kept for supervisor metrics logging.
+    if (state === "ended" || state === "escalation_hold") return;
+    logger.log("[engine] Agentforce AI confirmed live (supervisor tab: totalActive >= 1)");
+  }
+
+  /**
+   * Called externally when the Salesforce OmniChannel incoming signal fires,
+   * indicating Agentforce has transferred the call to a human agent queue.
+   * Enters escalation_hold directly — no transcript keyword detection needed.
+   */
+  function notifyEscalation() {
+    if (state === "ended" || state === "escalation_hold") {
+      logger.log(`[engine] notifyEscalation() called but state=${state} — ignoring`);
+      return;
+    }
+    logger.log("[engine] SF OmniChannel incoming signal received — Agentforce escalated to human agent");
+    if (geminiWs) {
+      geminiWs.close();
+      geminiWs = null;
+    }
+    state = "escalation_hold";
+    if (turnNudgeTimer) { clearTimeout(turnNudgeTimer); turnNudgeTimer = null; }
+
+    // Save recordings immediately — the conversation is over at this point.
+    // Don't wait for the 60s hold timer: the buffers are populated now and
+    // the process may exit before the hold expires.
+    try {
+      const outputDir = opts.artifactDir || "test-results/nl-caller";
+      mkdirSync(outputDir, { recursive: true });
+      if (recordingBuffers.inbound.length > 0) {
+        const inboundPcm = Buffer.concat(recordingBuffers.inbound);
+        const inboundPath = `${outputDir}/recording-agentforce.wav`;
+        writePcmWav(inboundPath, inboundPcm);
+        logger.log(`[engine] Agentforce audio saved (escalation): ${inboundPath} (${(inboundPcm.length / 2 / 8000).toFixed(1)}s)`);
+      }
+      if (recordingBuffers.outbound.length > 0) {
+        const outboundPcm = Buffer.concat(recordingBuffers.outbound);
+        const outboundPath = `${outputDir}/recording-caller.wav`;
+        writePcmWav(outboundPath, outboundPcm);
+        logger.log(`[engine] Caller audio saved (escalation): ${outboundPath} (${(outboundPcm.length / 2 / 8000).toFixed(1)}s)`);
+      }
+    } catch (err) {
+      logger.error(`[engine] Error saving escalation recordings: ${err.message}`);
+    }
+
+    const holdSec = opts.escalationHoldSec ?? 60;
+    logger.log(`[engine] Holding call open for ${holdSec}s while transfer completes...`);
+    setTimeout(() => onCallEnded({ reason: "escalation" }), holdSec * 1000);
   }
 
   // ── Return engine interface ───────────────────────────────────────
@@ -529,5 +718,7 @@ Rules:
     onAudioIn,
     onMarkPlayed,
     onCallEnded,
+    startConversation,
+    notifyEscalation,
   };
 }

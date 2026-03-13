@@ -33,12 +33,22 @@ async function validateSessions() {
     process.env.CONNECT_STORAGE_STATE || ".auth/connect-ccp-personal.json"
   );
 
+  // OAuth mode: SF login happens at test-time via refresh_token → frontdoor.jsp.
+  // No stored session file is needed or expected — skip SF session check entirely.
+  const sfIsOAuth = (process.env.SF_AUTH_METHOD ?? "").trim().toLowerCase() === "oauth";
+
+  // No Connect instance configured: CCP auth not needed for this profile.
+  const connectInstanceAlias = (process.env.CONNECT_INSTANCE_ALIAS ?? "").trim();
+  const skipConnectCheck = !connectInstanceAlias;
+
   let sfNeedsRefresh = false;
   let connectNeedsRefresh = false;
 
   // ── SF session: file + cookie check ──
   let sfCookies = null;
-  if (!fs.existsSync(sfStatePath)) {
+  if (sfIsOAuth) {
+    console.log(`[session-check] SF auth method is OAuth — session file not required, skipping check.`);
+  } else if (!fs.existsSync(sfStatePath)) {
     console.log(`[session-check] SF session file missing. Will attempt auto-refresh.`);
     sfNeedsRefresh = true;
   } else {
@@ -68,7 +78,9 @@ async function validateSessions() {
 
   // ── Connect session: file + cookie check ──
   let connectCookies = null;
-  if (!fs.existsSync(connectStatePath)) {
+  if (skipConnectCheck) {
+    console.log(`[session-check] No CONNECT_INSTANCE_ALIAS configured — skipping Connect CCP session check.`);
+  } else if (!fs.existsSync(connectStatePath)) {
     console.log(`[session-check] Connect CCP session file missing. Will attempt auto-refresh.`);
     connectNeedsRefresh = true;
   } else {
@@ -228,6 +240,15 @@ async function main() {
 
   const suiteIsV2 = isDeclarativeSuite(suite);
   const systemEnv = loadSystemSettingsEnv();
+
+  // Auto-bind INSTANCE from suite.connectionSetId when not explicitly provided.
+  // Prevents silent credential/vocabulary mismatch (e.g. suite says cdo-org but
+  // INSTANCE falls back to personal because the env var was not passed).
+  if (!process.env.INSTANCE && suite.connectionSetId) {
+    process.env.INSTANCE = suite.connectionSetId;
+    console.log(`[suite] INSTANCE not set — using suite connectionSetId: ${suite.connectionSetId}`);
+  }
+
   console.log(`E2E suite: ${suiteName}`);
   if (Object.keys(systemEnv).length > 0) {
     console.log(`System settings: ${Object.keys(systemEnv).length} values from instances/system-settings.json`);

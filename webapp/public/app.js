@@ -74,6 +74,10 @@ const ALL_STEP_ACTIONS = [
 // ── API ─────────────────────────────────────────────────────────────────────
 
 async function api(endpoint, opts = {}) {
+  // When auth module is loaded, use it for token management + auto-refresh
+  if (typeof auth !== "undefined" && auth.isAuthenticated()) {
+    return auth.apiFetch(endpoint, opts);
+  }
   const res = await fetch(`/api${endpoint}`, {
     headers: { "Content-Type": "application/json" },
     ...opts,
@@ -84,6 +88,38 @@ async function api(endpoint, opts = {}) {
 // ── Init ────────────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // Auth bootstrap — try restoring session from refresh token
+  if (typeof auth !== "undefined") {
+    const restored = await auth.tryRestore();
+    if (!restored) {
+      // No valid session — redirect to login (unless auth is disabled server-side)
+      try {
+        const probe = await fetch("/api/suites");
+        if (probe.status === 401) {
+          window.location.href = "/login.html";
+          return;
+        }
+      } catch {}
+    }
+
+    // Show user menu + apply role-based UI
+    if (auth.user) {
+      const userMenu = document.getElementById("user-menu");
+      const nameEl = document.getElementById("user-display-name");
+      if (userMenu && nameEl) {
+        nameEl.textContent = auth.user.displayName;
+        userMenu.style.display = "";
+      }
+      auth.applyRoleUI();
+    }
+
+    // Logout button
+    const logoutBtn = document.getElementById("btn-logout");
+    if (logoutBtn) {
+      logoutBtn.addEventListener("click", () => auth.logout());
+    }
+  }
+
   await loadProfiles();
   await loadSuites();
   bindGlobalEvents();
@@ -163,6 +199,10 @@ function bindGlobalEvents() {
   document.getElementById("btn-connections").addEventListener("click", () => {
     setupDropdown.classList.add("hidden");
     openConnectionsModal();
+  });
+  document.getElementById("btn-vault-settings").addEventListener("click", () => {
+    setupDropdown.classList.add("hidden");
+    openVaultSettingsModal();
   });
 
   document.getElementById("btn-cancel-edit").addEventListener("click", () => {
@@ -257,17 +297,17 @@ function renderScenarioList() {
       return `
         <div class="scenario-card ${isActive ? "active" : ""} ${isDisabled ? "disabled" : ""}" data-id="${s.id}" data-idx="${idx}" draggable="true" title="${nlTip}">
           <div class="sc-top-row">
-            <span class="sc-drag-handle" title="Drag to reorder">&#x2630;</span>
+            <span class="sc-drag-handle role-builder" title="Drag to reorder">&#x2630;</span>
             <div class="sc-id">${s.id}</div>
           </div>
           <div class="sc-desc">${s.description || ""}</div>
           <div class="sc-bottom-row">
             <div class="sc-badges">${badges.join("")}</div>
             <div class="sc-actions">
-              <button class="sc-btn sc-btn-toggle" data-action="toggle" data-id="${s.id}" title="${isDisabled ? "Enable" : "Disable"} scenario">${isDisabled ? "&#x25CB;" : "&#x25CF;"}</button>
-              <button class="sc-btn sc-btn-dup" data-action="duplicate" data-id="${s.id}" title="Duplicate scenario">&#x29C9;</button>
-              <button class="sc-btn sc-btn-edit" data-action="edit" data-id="${s.id}" title="Edit scenario">&#x270E;</button>
-              <button class="sc-btn sc-btn-delete" data-action="delete" data-id="${s.id}" title="Delete scenario">&#x2715;</button>
+              <button class="sc-btn sc-btn-toggle role-builder" data-action="toggle" data-id="${s.id}" title="${isDisabled ? "Enable" : "Disable"} scenario">${isDisabled ? "&#x25CB;" : "&#x25CF;"}</button>
+              <button class="sc-btn sc-btn-dup role-builder" data-action="duplicate" data-id="${s.id}" title="Duplicate scenario">&#x29C9;</button>
+              <button class="sc-btn sc-btn-edit role-builder" data-action="edit" data-id="${s.id}" title="Edit scenario">&#x270E;</button>
+              <button class="sc-btn sc-btn-delete role-builder" data-action="delete" data-id="${s.id}" title="Delete scenario">&#x2715;</button>
             </div>
           </div>
         </div>
@@ -278,7 +318,7 @@ function renderScenarioList() {
   // Drag-and-drop reordering
   initScenarioDragDrop(list);
 
-  // Click anywhere on card -> edit
+  // Click anywhere on card -> view/edit
   list.querySelectorAll(".scenario-card").forEach((card) => {
     card.addEventListener("click", (e) => {
       if (e.target.closest('[data-action]')) return;
@@ -352,6 +392,9 @@ function renderScenarioList() {
       }
     });
   });
+
+  // Re-apply role-based visibility to dynamically rendered elements
+  if (typeof auth !== "undefined") auth.applyRoleUI();
 }
 
 // ── Drag-and-Drop Reordering ────────────────────────────────────────────────
@@ -3573,16 +3616,23 @@ async function startRun(dryRun) {
     });
 
     if (res.error) {
-      appendRunLine("error", res.error);
-      endRun("failed");
-      return;
+      if (res.runId) {
+        // A run is already in progress — attach to it instead of failing
+        appendRunLine("log", `Attaching to existing run: ${res.runId}`);
+        runState.active = true;
+      } else {
+        appendRunLine("error", res.error);
+        endRun("failed");
+        return;
+      }
+    } else {
+      runState.active = true;
+      appendRunLine("header", `Run started: ${res.runId}  (${dryRun ? "dry run" : "live execution"})`);
     }
 
-    runState.active = true;
-    appendRunLine("header", `Run started: ${res.runId}  (${dryRun ? "dry run" : "live execution"})`);
-
-    // Connect SSE stream
-    const es = new EventSource("/api/run/stream");
+    // Connect SSE stream (pass token as query param since EventSource can't set headers)
+    const sseToken = (typeof auth !== "undefined" && auth.accessToken) ? `?token=${encodeURIComponent(auth.accessToken)}` : "";
+    const es = new EventSource(`/api/run/stream${sseToken}`);
     runState.eventSource = es;
 
     es.onmessage = (event) => {
@@ -4372,6 +4422,80 @@ function importSuite() {
   input.click();
 }
 
+// ── Vault Settings (global, one-time super-admin setup) ──────────────────────
+
+async function openVaultSettingsModal() {
+  const cfg = await api("/vault-config").catch(() => ({}));
+
+  const body = `
+    <p class="cred-hint">Configure once. All connections will automatically use Vault to store secrets. Secrets are stored at <code>{Base Path}/{connection-slug}/{group}</code>.</p>
+    <div class="form-group">
+      <label class="form-label">Vault Address</label>
+      <input type="text" class="form-input" id="vault-cfg-addr" value="${esc(cfg.addr || "")}" placeholder="http://vault.internal:8200" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Vault Token</label>
+      <div class="password-field">
+        <input type="password" class="form-input" id="vault-cfg-token" placeholder="${cfg.hasToken ? "Already set — leave blank to keep" : "hvs.xxxxx or root (dev)"}" />
+        <button type="button" class="pw-toggle" data-target="vault-cfg-token" title="Show/hide">&#x1F441;</button>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Secrets Base Path</label>
+      <input type="text" class="form-input" id="vault-cfg-base" value="${esc(cfg.basePath || "secret/data/voice")}" placeholder="secret/data/voice" />
+      <p class="cred-hint" style="margin-top:4px">Per-connection paths: <code>{base}/{connection-slug}/salesforce</code>, <code>{base}/{connection-slug}/aws</code>, etc.</p>
+    </div>
+    <div class="vault-test-row">
+      <button class="btn btn-outline btn-sm" id="vault-cfg-test-btn">Test Connection</button>
+      <span id="vault-cfg-test-result"></span>
+    </div>
+  `;
+
+  const footer = `
+    <button class="btn btn-outline" id="vault-cfg-cancel-btn">Cancel</button>
+    <button class="btn btn-primary" id="vault-cfg-save-btn">Save Vault Settings</button>
+  `;
+
+  openModal("Vault Settings", body, footer);
+
+  // pw-toggle
+  document.querySelectorAll(".pw-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const inp = document.getElementById(btn.dataset.target);
+      if (inp) inp.type = inp.type === "password" ? "text" : "password";
+    });
+  });
+
+  document.getElementById("vault-cfg-test-btn").addEventListener("click", async () => {
+    const addr = document.getElementById("vault-cfg-addr").value.trim();
+    const token = document.getElementById("vault-cfg-token").value.trim() ||
+      (cfg.hasToken ? "__use_stored__" : "");
+    const resultEl = document.getElementById("vault-cfg-test-result");
+    if (!addr) { resultEl.textContent = "Enter Vault address first"; return; }
+    resultEl.textContent = "Testing…";
+    const r = await api("/vault-config/test", {
+      method: "POST",
+      body: JSON.stringify({ addr, token: token === "__use_stored__" ? null : token }),
+    }).catch(() => ({ ok: false, error: "Request failed" }));
+    resultEl.textContent = r.ok ? "✓ Connected" : `✗ ${r.error || `Status ${r.status}`}`;
+    resultEl.style.color = r.ok ? "var(--success)" : "var(--danger)";
+  });
+
+  document.getElementById("vault-cfg-cancel-btn").addEventListener("click", closeModal);
+  document.getElementById("vault-cfg-save-btn").addEventListener("click", async () => {
+    const addr = document.getElementById("vault-cfg-addr").value.trim();
+    const token = document.getElementById("vault-cfg-token").value.trim();
+    const basePath = document.getElementById("vault-cfg-base").value.trim();
+    const r = await api("/vault-config", {
+      method: "PUT",
+      body: JSON.stringify({ addr, basePath, token: token || undefined }),
+    });
+    if (r.error) { toast(r.error, "error"); return; }
+    toast("Vault settings saved", "success");
+    closeModal();
+  });
+}
+
 // ── Connection Set Management ────────────────────────────────────────────────
 
 function openConnectionsModal() {
@@ -4429,7 +4553,9 @@ function renderConnectionList() {
   }
 
   const body = `
-    ${cardsHtml}
+    <div style="max-height: 420px; overflow-y: auto; margin: -4px -4px 0; padding: 4px 4px 0;">
+      ${cardsHtml}
+    </div>
     <div style="margin-top: 12px;">
       <button class="btn btn-outline" id="modal-conn-new-btn">+ New Connection</button>
     </div>
@@ -4464,117 +4590,54 @@ async function openConnectionForm(existing) {
   const isEdit = !!existing;
   const title = isEdit ? `Edit: ${existing.label}` : "New Connection";
 
-  // Load existing .env values if editing
-  let envData = null;
-  let currentBackend = "env";
-  let currentSfAuthMethod = "password";
-  if (isEdit) {
-    envData = await api(`/profile/env?id=${encodeURIComponent(existing.id)}`);
-    if (envData?.backend) currentBackend = envData.backend;
-    if (envData?.env?.SF_AUTH_METHOD) currentSfAuthMethod = envData.env.SF_AUTH_METHOD;
-  }
+  // Load existing env values and global vault status in parallel
+  const [envData, vaultCfg] = await Promise.all([
+    isEdit ? api(`/profile/env?id=${encodeURIComponent(existing.id)}`).catch(() => null) : Promise.resolve(null),
+    api("/vault-config").catch(() => ({})),
+  ]);
   const env = envData?.env || {};
+  const currentSfAuthMethod = env.SF_AUTH_METHOD || "password";
+  const vaultActive = !!(vaultCfg.addr && vaultCfg.hasToken);
 
   const regionOptions = AWS_REGIONS.map(
     (r) => `<option value="${r}"${r === (existing?.connect?.region || "us-west-2") ? " selected" : ""}>${r}</option>`
   ).join("");
 
+  const editPlaceholder = isEdit ? "Leave blank to keep existing" : "";
+
   const body = `
-    <div class="form-group">
-      <label class="form-label">Label</label>
-      <input type="text" class="form-input" id="modal-conn-label" value="${esc(existing?.label || "")}" placeholder="e.g., Production Org" />
-    </div>
-    <div class="form-group">
-      <label class="form-label">Customer <span class="optional">(optional)</span></label>
-      <input type="text" class="form-input" id="modal-conn-customer" value="${esc(existing?.customer || "")}" placeholder="e.g., Acme Corp" />
-    </div>
-    <div class="form-group">
-      <label class="form-label">Salesforce Login URL</label>
-      <select class="form-select" id="modal-conn-sf-login">
-        <option value="https://login.salesforce.com"${existing?.salesforce?.loginUrl === "https://login.salesforce.com" ? " selected" : ""}>login.salesforce.com (Production)</option>
-        <option value="https://test.salesforce.com"${existing?.salesforce?.loginUrl === "https://test.salesforce.com" ? " selected" : ""}>test.salesforce.com (Sandbox)</option>
-      </select>
-    </div>
+    ${vaultActive ? '<div class="vault-active-badge">&#x1F511; Vault active — secrets stored securely</div>' : ""}
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">SF App Name</label>
-        <input type="text" class="form-input" id="modal-conn-sf-app" value="${esc(existing?.salesforce?.appName || "Service Console")}" />
+        <label class="form-label">Label</label>
+        <input type="text" class="form-input" id="modal-conn-label" value="${esc(existing?.label || "")}" placeholder="e.g., Production Org" />
       </div>
       <div class="form-group">
-        <label class="form-label">SF Instance URL <span class="optional">(auto-detected after first login)</span></label>
-        <input type="text" class="form-input" id="modal-conn-sf-instance-url" value="${esc(env.SF_INSTANCE_URL || "")}" placeholder="https://myorg.lightning.force.com" />
-      </div>
-    </div>
-    <div class="form-row">
-      <div class="form-group">
-        <label class="form-label">Connect Instance Alias</label>
-        <input type="text" class="form-input" id="modal-conn-alias" value="${esc(existing?.connect?.instanceAlias || "")}" placeholder="myinstance.my.connect.aws" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Connect Region</label>
-        <select class="form-select" id="modal-conn-region">${regionOptions}</select>
+        <label class="form-label">Customer <span class="optional">(optional)</span></label>
+        <input type="text" class="form-input" id="modal-conn-customer" value="${esc(existing?.customer || "")}" placeholder="e.g., Acme Corp" />
       </div>
     </div>
 
-    <!-- Connection form tabs -->
-    <div class="conn-tab-bar">
-      <button class="conn-tab-btn active" data-conn-tab="credentials">Connection</button>
-      <button class="conn-tab-btn" data-conn-tab="api-keys">API Keys</button>
-    </div>
-
-    <!-- Tab 1: Connection (credentials) -->
-    <div class="conn-tab-panel" id="conn-tab-credentials">
-
-    <div class="form-group">
-      <label class="form-label">Secrets Backend</label>
-      <div class="backend-toggle">
-        <label class="backend-option">
-          <input type="radio" name="secrets-backend" value="env" ${currentBackend === "env" ? "checked" : ""} />
-          <span class="backend-label">Direct (env)</span>
-          <span class="backend-desc">Credentials stored in .env file</span>
-        </label>
-        <label class="backend-option">
-          <input type="radio" name="secrets-backend" value="vault" ${currentBackend === "vault" ? "checked" : ""} />
-          <span class="backend-label">HashiCorp Vault</span>
-          <span class="backend-desc">References resolved at runtime</span>
-        </label>
+    <!-- Salesforce section -->
+    <div class="conn-section">
+      <div class="conn-section-header">Salesforce</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Login URL</label>
+          <select class="form-select" id="modal-conn-sf-login">
+            <option value="https://login.salesforce.com"${(existing?.salesforce?.loginUrl || "https://login.salesforce.com") !== "https://test.salesforce.com" ? " selected" : ""}>Production</option>
+            <option value="https://test.salesforce.com"${existing?.salesforce?.loginUrl === "https://test.salesforce.com" ? " selected" : ""}>Sandbox</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Auth Method</label>
+          <select class="form-select" id="modal-sf-auth-method">
+            <option value="password"${currentSfAuthMethod !== "oauth" ? " selected" : ""}>Username / Password</option>
+            <option value="oauth"${currentSfAuthMethod === "oauth" ? " selected" : ""}>OAuth (Connected App / ECA)</option>
+          </select>
+        </div>
       </div>
-    </div>
-
-    <div class="cred-warning" id="cred-warning-env" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
-      Credentials will be stored in plaintext on disk. Use Vault for shared or production environments.
-    </div>
-
-    <div class="form-group">
-      <label class="form-label">Salesforce Auth Method</label>
-      <div class="backend-toggle">
-        <label class="backend-option">
-          <input type="radio" name="sf-auth-method" value="password" ${currentSfAuthMethod !== "oauth" ? "checked" : ""} />
-          <span class="backend-label">Username / Password</span>
-          <span class="backend-desc">Browser login with credentials</span>
-        </label>
-        <label class="backend-option">
-          <input type="radio" name="sf-auth-method" value="oauth" ${currentSfAuthMethod === "oauth" ? "checked" : ""} />
-          <span class="backend-label">Connected App OAuth</span>
-          <span class="backend-desc">No password sharing — user approves via Salesforce</span>
-        </label>
-      </div>
-    </div>
-
-    <!-- OAuth mode fields -->
-    <div id="cred-oauth-fields" ${currentSfAuthMethod !== "oauth" ? 'style="display:none"' : ""}>
-      <p class="cred-hint">Click below to connect. You'll log in on Salesforce's website and authorize Audrique to access your org. No passwords are shared.</p>
-      <div class="form-group">
-        <button class="btn btn-primary" id="modal-oauth-connect-btn" type="button">Connect to Salesforce</button>
-        <span id="oauth-status-msg" style="margin-left: 12px; font-size: 0.85rem;"></span>
-      </div>
-    </div>
-
-    <!-- Password mode SF credentials (hidden when OAuth selected) -->
-    <div id="cred-password-sf-section" ${currentSfAuthMethod === "oauth" ? 'style="display:none"' : ""}>
-      <!-- env mode SF fields -->
-      <div id="cred-env-sf-fields" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
-        <h4 class="cred-section-title">Salesforce Credentials</h4>
+      <div id="sf-password-section" ${currentSfAuthMethod === "oauth" ? 'style="display:none"' : ""}>
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">SF Username</label>
@@ -4583,274 +4646,76 @@ async function openConnectionForm(existing) {
           <div class="form-group">
             <label class="form-label">SF Password</label>
             <div class="password-field">
-              <input type="password" class="form-input" id="modal-cred-sf-pass" value="${esc(env.SF_PASSWORD || "")}" placeholder="Password" />
-              <button type="button" class="pw-toggle" data-target="modal-cred-sf-pass" title="Show/hide">&#x1F441;</button>
+              <input type="password" class="form-input" id="modal-cred-sf-pass" placeholder="${editPlaceholder || "Password"}" />
+              <button type="button" class="pw-toggle" data-target="modal-cred-sf-pass">&#x1F441;</button>
             </div>
           </div>
         </div>
       </div>
-      <!-- vault mode SF: actual values (when base path set) -->
-      <div id="cred-vault-sf-vals" style="display:none">
-        <h4 class="cred-section-title">Salesforce Credentials <span class="optional" id="vault-path-hint-sf"></span></h4>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">SF Username</label>
-            <input type="text" class="form-input" id="modal-vault-val-sf-user" placeholder="admin@myorg.com" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">SF Password</label>
-            <div class="password-field">
-              <input type="password" class="form-input" id="modal-vault-val-sf-pass" placeholder="Password" />
-              <button type="button" class="pw-toggle" data-target="modal-vault-val-sf-pass" title="Show/hide">&#x1F441;</button>
-            </div>
-          </div>
-        </div>
-      </div>
-      <!-- vault mode SF: ref paths (when no base path — advanced) -->
-      <div id="cred-vault-sf-refs" ${currentBackend !== "vault" ? 'style="display:none"' : ""}>
-        <h4 class="cred-section-title">Salesforce Secret References</h4>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">SF Username Ref</label>
-            <input type="text" class="form-input vault-ref" id="modal-vault-sf-user" value="${esc(env.SF_USERNAME_REF || "")}" placeholder="kv/data/org#sf_username" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">SF Password Ref</label>
-            <input type="text" class="form-input vault-ref" id="modal-vault-sf-pass" value="${esc(env.SF_PASSWORD_REF || "")}" placeholder="kv/data/org#sf_password" />
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- OAuth + Vault: actual values (when base path set) -->
-    <div id="cred-oauth-vault-vals" style="display:none">
-      <h4 class="cred-section-title">OAuth Credentials <span class="optional" id="vault-path-hint-sf-oauth"></span></h4>
-      <div class="form-row">
+      <div id="sf-oauth-section" ${currentSfAuthMethod !== "oauth" ? 'style="display:none"' : ""}>
         <div class="form-group">
           <label class="form-label">Consumer Key</label>
           <div class="password-field">
-            <input type="password" class="form-input" id="modal-vault-val-oauth-key" placeholder="3MVG9..." />
-            <button type="button" class="pw-toggle" data-target="modal-vault-val-oauth-key" title="Show/hide">&#x1F441;</button>
+            <input type="password" class="form-input" id="modal-cred-oauth-key" placeholder="${editPlaceholder || "3MVG9..."}" />
+            <button type="button" class="pw-toggle" data-target="modal-cred-oauth-key">&#x1F441;</button>
           </div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Consumer Secret</label>
-          <div class="password-field">
-            <input type="password" class="form-input" id="modal-vault-val-oauth-secret" placeholder="Secret (optional with PKCE)" />
-            <button type="button" class="pw-toggle" data-target="modal-vault-val-oauth-secret" title="Show/hide">&#x1F441;</button>
-          </div>
+        <div class="form-group" style="display:flex;align-items:center;gap:12px">
+          <button class="btn btn-primary" id="modal-oauth-connect-btn" type="button">Connect to Salesforce</button>
+          <span id="oauth-status-msg" style="font-size:0.85rem"></span>
         </div>
       </div>
     </div>
-    <!-- OAuth + Vault: ref paths (when no base path — advanced) -->
-    <div id="cred-oauth-vault-refs" ${currentSfAuthMethod !== "oauth" || currentBackend !== "vault" ? 'style="display:none"' : ""}>
-      <h4 class="cred-section-title">OAuth Secret References</h4>
+
+    <!-- Amazon Connect section -->
+    <div class="conn-section">
+      <div class="conn-section-header">Amazon Connect</div>
       <div class="form-row">
         <div class="form-group">
-          <label class="form-label">Consumer Key Ref</label>
-          <input type="text" class="form-input vault-ref" id="modal-vault-oauth-key" value="${esc(env.SF_OAUTH_CONSUMER_KEY_REF || "")}" placeholder="kv/data/org#consumer_key" />
+          <label class="form-label">Instance Alias</label>
+          <input type="text" class="form-input" id="modal-conn-alias" value="${esc(existing?.connect?.instanceAlias || "")}" placeholder="myinstance.my.connect.aws" />
         </div>
         <div class="form-group">
-          <label class="form-label">Consumer Secret Ref</label>
-          <input type="text" class="form-input vault-ref" id="modal-vault-oauth-secret" value="${esc(env.SF_OAUTH_CONSUMER_SECRET_REF || "")}" placeholder="kv/data/org#consumer_secret" />
+          <label class="form-label">Region</label>
+          <select class="form-select" id="modal-conn-region">${regionOptions}</select>
         </div>
       </div>
-    </div>
-
-    <!-- Vault configuration (always available when vault backend selected) -->
-    <div id="cred-vault-fields" ${currentBackend !== "vault" ? 'style="display:none"' : ""}>
-      <h4 class="cred-section-title">Vault Configuration</h4>
-      <div class="form-group">
-        <label class="form-label">Vault Address</label>
-        <input type="text" class="form-input" id="modal-vault-addr" value="${esc(env.VAULT_ADDR || "")}" placeholder="https://vault.internal:8200" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">Vault Token</label>
-        <div class="password-field">
-          <input type="password" class="form-input" id="modal-vault-token" value="${esc(env.VAULT_TOKEN || "")}" placeholder="hvs.xxxxx" />
-          <button type="button" class="pw-toggle" data-target="modal-vault-token" title="Show/hide">&#x1F441;</button>
-        </div>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Vault Base Path <span class="optional">(secrets stored at this path)</span></label>
-        <input type="text" class="form-input" id="modal-vault-base" value="${esc(existing?.vault?.basePath || "")}" placeholder="secret/data/voice/my-org" />
-      </div>
-      <div class="vault-test-row">
-        <button class="btn btn-outline btn-sm" id="modal-vault-test-btn">Test Vault Connection</button>
-        <span id="vault-test-result"></span>
-      </div>
-
-      <p class="cred-hint" id="vault-value-mode-info" style="display:none">Secrets will be written directly to Vault on save. Only references are stored in .env.</p>
-
-      <!-- Value mode: Connect Federation API (when base path set) -->
-      <div id="cred-vault-aws-vals" style="display:none">
-        <h4 class="cred-section-title">Connect Federation API <span class="optional" id="vault-path-hint-aws"></span></h4>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">AWS Access Key ID</label>
-            <div class="password-field">
-              <input type="password" class="form-input" id="modal-vault-val-aws-access-key" placeholder="AKIA..." />
-              <button type="button" class="pw-toggle" data-target="modal-vault-val-aws-access-key" title="Show/hide">&#x1F441;</button>
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">AWS Secret Access Key</label>
-            <div class="password-field">
-              <input type="password" class="form-input" id="modal-vault-val-aws-secret-key" placeholder="Secret key" />
-              <button type="button" class="pw-toggle" data-target="modal-vault-val-aws-secret-key" title="Show/hide">&#x1F441;</button>
-            </div>
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Connect Instance ID</label>
-          <input type="text" class="form-input" id="modal-vault-val-connect-instance-id" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
-        </div>
-
-        <details class="cred-collapsible">
-          <summary class="cred-section-title">Legacy AWS Login (optional)</summary>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">AWS Username</label>
-              <input type="text" class="form-input" id="modal-vault-val-aws-user" placeholder="Username" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">AWS Password</label>
-              <div class="password-field">
-                <input type="password" class="form-input" id="modal-vault-val-aws-pass" placeholder="Password" />
-                <button type="button" class="pw-toggle" data-target="modal-vault-val-aws-pass" title="Show/hide">&#x1F441;</button>
-              </div>
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">AWS Account ID</label>
-            <input type="text" class="form-input" id="modal-vault-val-aws-account" placeholder="123456789012" />
-          </div>
-        </details>
-
-        <details class="cred-collapsible">
-          <summary class="cred-section-title">Twilio (optional)</summary>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">Account SID</label>
-              <input type="text" class="form-input" id="modal-vault-val-twilio-sid" placeholder="AC..." />
-            </div>
-            <div class="form-group">
-              <label class="form-label">Auth Token</label>
-              <div class="password-field">
-                <input type="password" class="form-input" id="modal-vault-val-twilio-token" placeholder="Auth token" />
-                <button type="button" class="pw-toggle" data-target="modal-vault-val-twilio-token" title="Show/hide">&#x1F441;</button>
-              </div>
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">From Number</label>
-              <input type="text" class="form-input" id="modal-vault-val-twilio-from" value="${esc(env.TWILIO_FROM_NUMBER || "")}" placeholder="+1234567890" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">Connect Entrypoint</label>
-              <input type="text" class="form-input" id="modal-vault-val-connect-entry" value="${esc(env.CONNECT_ENTRYPOINT_NUMBER || "")}" placeholder="+1234567890" />
-            </div>
-          </div>
-        </details>
-      </div>
-
-      <!-- Ref mode: Connect Federation API (when no base path — advanced) -->
-      <div id="cred-vault-aws-refs">
-        <h4 class="cred-section-title">Connect Federation API References</h4>
-        <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">AWS Access Key ID Ref</label>
-            <input type="text" class="form-input vault-ref" id="modal-vault-aws-access-key" value="${esc(env.AWS_ACCESS_KEY_ID_REF || "")}" placeholder="kv/data/org#access_key_id" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">AWS Secret Access Key Ref</label>
-            <input type="text" class="form-input vault-ref" id="modal-vault-aws-secret-key" value="${esc(env.AWS_SECRET_ACCESS_KEY_REF || "")}" placeholder="kv/data/org#secret_access_key" />
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Connect Instance ID Ref</label>
-          <input type="text" class="form-input vault-ref" id="modal-vault-connect-instance-id" value="${esc(env.CONNECT_INSTANCE_ID_REF || "")}" placeholder="kv/data/org#connect_instance_id" />
-        </div>
-
-        <details class="cred-collapsible">
-          <summary class="cred-section-title">Legacy AWS Login Refs (optional)</summary>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">AWS Username Ref</label>
-              <input type="text" class="form-input vault-ref" id="modal-vault-aws-user" value="${esc(env.AWS_USERNAME_REF || "")}" placeholder="kv/data/org#aws_username" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">AWS Password Ref</label>
-              <input type="text" class="form-input vault-ref" id="modal-vault-aws-pass" value="${esc(env.AWS_PASSWORD_REF || "")}" placeholder="kv/data/org#aws_password" />
-            </div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">AWS Account ID Ref</label>
-            <input type="text" class="form-input vault-ref" id="modal-vault-aws-account" value="${esc(env.AWS_ACCOUNT_ID_REF || "")}" placeholder="kv/data/org#aws_account_id" />
-          </div>
-        </details>
-
-        <details class="cred-collapsible">
-          <summary class="cred-section-title">Twilio Refs (optional)</summary>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">Account SID Ref</label>
-              <input type="text" class="form-input vault-ref" id="modal-vault-twilio-sid" value="${esc(env.TWILIO_ACCOUNT_SID_REF || "")}" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">Auth Token Ref</label>
-              <input type="text" class="form-input vault-ref" id="modal-vault-twilio-token" value="${esc(env.TWILIO_AUTH_TOKEN_REF || "")}" />
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="form-label">From Number</label>
-              <input type="text" class="form-input" id="modal-vault-twilio-from" value="${esc(env.TWILIO_FROM_NUMBER || "")}" placeholder="+1234567890" />
-            </div>
-            <div class="form-group">
-              <label class="form-label">Connect Entrypoint</label>
-              <input type="text" class="form-input" id="modal-vault-connect-entry" value="${esc(env.CONNECT_ENTRYPOINT_NUMBER || "")}" placeholder="+1234567890" />
-            </div>
-          </div>
-        </details>
-      </div>
-
-    </div>
-
-    <!-- env mode: AWS + Twilio direct credentials -->
-    <div id="cred-env-fields" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
-      <h4 class="cred-section-title">AWS / Amazon Connect</h4>
       <div class="form-row">
         <div class="form-group">
-          <label class="form-label">AWS Username</label>
-          <input type="text" class="form-input" id="modal-cred-aws-user" value="${esc(env.AWS_USERNAME || "")}" />
+          <label class="form-label">Access Key ID</label>
+          <div class="password-field">
+            <input type="password" class="form-input" id="modal-cred-aws-access-key" placeholder="${editPlaceholder || "AKIA..."}" />
+            <button type="button" class="pw-toggle" data-target="modal-cred-aws-access-key">&#x1F441;</button>
+          </div>
         </div>
         <div class="form-group">
-          <label class="form-label">AWS Password</label>
+          <label class="form-label">Secret Access Key</label>
           <div class="password-field">
-            <input type="password" class="form-input" id="modal-cred-aws-pass" value="${esc(env.AWS_PASSWORD || "")}" placeholder="Password" />
-            <button type="button" class="pw-toggle" data-target="modal-cred-aws-pass" title="Show/hide">&#x1F441;</button>
+            <input type="password" class="form-input" id="modal-cred-aws-secret-key" placeholder="${editPlaceholder || "Secret key"}" />
+            <button type="button" class="pw-toggle" data-target="modal-cred-aws-secret-key">&#x1F441;</button>
           </div>
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">AWS Account ID</label>
-        <input type="text" class="form-input" id="modal-cred-aws-account" value="${esc(env.AWS_ACCOUNT_ID || "")}" placeholder="123456789012" />
+        <label class="form-label">Connect Instance ID</label>
+        <input type="text" class="form-input" id="modal-cred-connect-instance-id" value="${esc(env.CONNECT_INSTANCE_ID || env.CONNECT_INSTANCE_ID_REF?.includes("#") ? "" : "")}" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
       </div>
+    </div>
 
-      <details class="cred-collapsible">
-        <summary class="cred-section-title">Twilio (optional)</summary>
+    <!-- Twilio (collapsible) -->
+    <details class="conn-section-collapsible">
+      <summary class="conn-section-header">Twilio <span class="optional">(optional)</span></summary>
+      <div class="conn-section-body">
         <div class="form-row">
           <div class="form-group">
             <label class="form-label">Account SID</label>
-            <input type="text" class="form-input" id="modal-cred-twilio-sid" value="${esc(env.TWILIO_ACCOUNT_SID || "")}" />
+            <input type="text" class="form-input" id="modal-cred-twilio-sid" value="${esc(env.TWILIO_ACCOUNT_SID || "")}" placeholder="AC..." />
           </div>
           <div class="form-group">
             <label class="form-label">Auth Token</label>
             <div class="password-field">
-              <input type="password" class="form-input" id="modal-cred-twilio-token" value="${esc(env.TWILIO_AUTH_TOKEN || "")}" />
-              <button type="button" class="pw-toggle" data-target="modal-cred-twilio-token" title="Show/hide">&#x1F441;</button>
+              <input type="password" class="form-input" id="modal-cred-twilio-token" placeholder="${editPlaceholder || "Auth token"}" />
+              <button type="button" class="pw-toggle" data-target="modal-cred-twilio-token">&#x1F441;</button>
             </div>
           </div>
         </div>
@@ -4864,51 +4729,59 @@ async function openConnectionForm(existing) {
             <input type="text" class="form-input" id="modal-cred-connect-entry" value="${esc(env.CONNECT_ENTRYPOINT_NUMBER || "")}" placeholder="+1234567890" />
           </div>
         </div>
-      </details>
+      </div>
+    </details>
 
-    </div>
-
-    </div><!-- end conn-tab-credentials -->
-
-    <!-- Tab 2: API Keys -->
-    <div class="conn-tab-panel" id="conn-tab-api-keys" style="display:none;">
-      <p class="cred-hint">API keys for NL Caller (AI-to-AI voice testing). Keys are stored in your .env file (gitignored) or Vault — never committed to source control.</p>
-
-      <!-- Vault mode: actual value (when base path set) -->
-      <div id="api-keys-vault-vals" style="display:none">
-        <h4 class="cred-section-title">Gemini (Google AI) <span class="optional" id="vault-path-hint-gemini"></span></h4>
+    <!-- AI Providers (collapsible) -->
+    <details class="conn-section-collapsible">
+      <summary class="conn-section-header">AI Providers <span class="optional">(optional — NL Caller)</span></summary>
+      <div class="conn-section-body">
         <div class="form-group">
           <label class="form-label">Gemini API Key</label>
           <div class="password-field">
-            <input type="password" class="form-input" id="modal-vault-val-gemini-key" placeholder="AIza..." />
-            <button type="button" class="pw-toggle" data-target="modal-vault-val-gemini-key" title="Show/hide">&#x1F441;</button>
+            <input type="password" class="form-input" id="modal-cred-gemini-key" placeholder="${editPlaceholder || "AIza..."}" />
+            <button type="button" class="pw-toggle" data-target="modal-cred-gemini-key">&#x1F441;</button>
           </div>
         </div>
       </div>
-      <!-- Vault mode: ref path (when no base path — advanced) -->
-      <div id="api-keys-vault" ${currentBackend !== "vault" ? 'style="display:none"' : ""}>
-        <h4 class="cred-section-title">Gemini (Google AI)</h4>
-        <div class="form-group">
-          <label class="form-label">Gemini API Key Ref</label>
-          <input type="text" class="form-input vault-ref" id="modal-vault-gemini-key" value="${esc(env.GEMINI_API_KEY_REF || "")}" placeholder="kv/data/org#gemini_api_key" />
-        </div>
-      </div>
+    </details>
 
-      <!-- Env mode API keys -->
-      <div id="api-keys-env" ${currentBackend !== "env" ? 'style="display:none"' : ""}>
-        <h4 class="cred-section-title">Gemini (Google AI)</h4>
-        <div class="form-group">
-          <label class="form-label">Gemini API Key</label>
-          <div class="password-field">
-            <input type="password" class="form-input" id="modal-cred-gemini-key" value="${esc(env.GEMINI_API_KEY || "")}" placeholder="AIza..." />
-            <button type="button" class="pw-toggle" data-target="modal-cred-gemini-key" title="Show/hide">&#x1F441;</button>
+    <!-- Advanced (collapsible) -->
+    <details class="conn-section-collapsible">
+      <summary class="conn-section-header">Advanced</summary>
+      <div class="conn-section-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">SF App Name</label>
+            <input type="text" class="form-input" id="modal-conn-sf-app" value="${esc(existing?.salesforce?.appName || "Service Console")}" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">SF Instance URL <span class="optional">(auto-detected)</span></label>
+            <input type="text" class="form-input" id="modal-conn-sf-instance-url" value="${esc(env.SF_INSTANCE_URL || "")}" placeholder="https://myorg.lightning.force.com" />
           </div>
         </div>
-        <div class="cred-warning">
-          API keys are stored in your instance .env file which is gitignored. For shared environments, use Vault backend instead.
-        </div>
+        <details class="cred-collapsible">
+          <summary class="cred-section-title">Legacy AWS Console Login <span class="optional">(optional)</span></summary>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">AWS Username</label>
+              <input type="text" class="form-input" id="modal-cred-aws-user" value="${esc(env.AWS_USERNAME || "")}" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">AWS Password</label>
+              <div class="password-field">
+                <input type="password" class="form-input" id="modal-cred-aws-pass" placeholder="${editPlaceholder || "Password"}" />
+                <button type="button" class="pw-toggle" data-target="modal-cred-aws-pass">&#x1F441;</button>
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">AWS Account ID</label>
+            <input type="text" class="form-input" id="modal-cred-aws-account" value="${esc(env.AWS_ACCOUNT_ID || "")}" placeholder="123456789012" />
+          </div>
+        </details>
       </div>
-    </div><!-- end conn-tab-api-keys -->
+    </details>
   `;
 
   const footer = `
@@ -4917,74 +4790,31 @@ async function openConnectionForm(existing) {
   `;
   openModal(title, body, footer);
 
-  // Tab switching for Connection / API Keys
-  document.querySelectorAll(".conn-tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const tab = btn.dataset.connTab;
-      document.querySelectorAll(".conn-tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.connTab === tab));
-      document.getElementById("conn-tab-credentials").style.display = tab === "credentials" ? "" : "none";
-      document.getElementById("conn-tab-api-keys").style.display = tab === "api-keys" ? "" : "none";
-    });
+  // SF auth method toggle
+  document.getElementById("modal-sf-auth-method").addEventListener("change", (e) => {
+    const isOAuth = e.target.value === "oauth";
+    document.getElementById("sf-password-section").style.display = isOAuth ? "none" : "";
+    document.getElementById("sf-oauth-section").style.display = isOAuth ? "" : "none";
   });
 
-  // Unified toggle handler for both SF auth method and secrets backend
-  function updateCredentialVisibility() {
-    const isOAuth = document.querySelector('input[name="sf-auth-method"]:checked')?.value === "oauth";
-    const isVault = document.querySelector('input[name="secrets-backend"]:checked')?.value === "vault";
-
-    // OAuth vs Password SF fields
-    document.getElementById("cred-oauth-fields").style.display = isOAuth ? "" : "none";
-    document.getElementById("cred-password-sf-section").style.display = isOAuth ? "none" : "";
-
-    // OAuth + Vault: show value or ref inputs depending on base path
-    const hasBase = !!document.getElementById("modal-vault-base")?.value?.trim();
-    const oauthVaultVals = document.getElementById("cred-oauth-vault-vals");
-    if (oauthVaultVals) oauthVaultVals.style.display = (isOAuth && isVault && hasBase) ? "" : "none";
-    const oauthVaultRefs = document.getElementById("cred-oauth-vault-refs");
-    if (oauthVaultRefs) oauthVaultRefs.style.display = (isOAuth && isVault && !hasBase) ? "" : "none";
-
-    // Vault vs env sections
-    document.getElementById("cred-vault-fields").style.display = isVault ? "" : "none";
-    document.getElementById("cred-env-fields").style.display = isVault ? "none" : "";
-
-    // Vault value-mode vs ref-mode for AWS/Twilio
-    const vaultAwsVals = document.getElementById("cred-vault-aws-vals");
-    const vaultAwsRefs = document.getElementById("cred-vault-aws-refs");
-    if (vaultAwsVals) vaultAwsVals.style.display = (isVault && hasBase) ? "" : "none";
-    if (vaultAwsRefs) vaultAwsRefs.style.display = (isVault && !hasBase) ? "" : "none";
-
-    // Password + Vault: SF value or ref fields depending on base path
-    const vaultSfVals = document.getElementById("cred-vault-sf-vals");
-    if (vaultSfVals) vaultSfVals.style.display = (!isOAuth && isVault && hasBase) ? "" : "none";
-    const vaultSfRefs = document.getElementById("cred-vault-sf-refs");
-    if (vaultSfRefs) vaultSfRefs.style.display = (!isOAuth && isVault && !hasBase) ? "" : "none";
-    const envSfFields = document.getElementById("cred-env-sf-fields");
-    if (envSfFields) envSfFields.style.display = (!isOAuth && !isVault) ? "" : "none";
-
-    // Warning
-    const warningEl = document.getElementById("cred-warning-env");
-    if (warningEl) warningEl.style.display = isVault ? "none" : "";
-
-    // API Keys tab: show vault value/ref or env panel based on backend + base path
-    const apiKeysVaultVals = document.getElementById("api-keys-vault-vals");
-    const apiKeysVault = document.getElementById("api-keys-vault");
-    const apiKeysEnv = document.getElementById("api-keys-env");
-    if (apiKeysVaultVals) apiKeysVaultVals.style.display = (isVault && hasBase) ? "" : "none";
-    if (apiKeysVault) apiKeysVault.style.display = (isVault && !hasBase) ? "" : "none";
-    if (apiKeysEnv) apiKeysEnv.style.display = isVault ? "none" : "";
-  }
-
-  document.querySelectorAll('input[name="sf-auth-method"]').forEach((radio) => {
-    radio.addEventListener("change", updateCredentialVisibility);
-  });
-  document.querySelectorAll('input[name="secrets-backend"]').forEach((radio) => {
-    radio.addEventListener("change", updateCredentialVisibility);
-  });
-
-  // OAuth "Connect to Salesforce" button
+  // OAuth "Connect to Salesforce" button — auto-save first so consumer key is persisted
   const oauthConnectBtn = document.getElementById("modal-oauth-connect-btn");
   if (oauthConnectBtn) {
-    oauthConnectBtn.addEventListener("click", () => startSfOauthFlow(isEdit ? existing.id : null));
+    oauthConnectBtn.addEventListener("click", async () => {
+      const msgEl = document.getElementById("oauth-status-msg");
+      if (msgEl) { msgEl.textContent = "Saving..."; msgEl.style.color = "var(--text-secondary)"; }
+      await saveConnection(existing?.id);
+      // After save, profile exists — use existing.id or look up by label
+      let profileId = existing?.id;
+      if (!profileId) {
+        await loadProfiles();
+        const label = document.getElementById("modal-conn-label")?.value?.trim();
+        const found = state.profiles.find((p) => p.label === label);
+        profileId = found?.id;
+      }
+      if (!profileId) { toast("Save failed — cannot start OAuth", "error"); return; }
+      startSfOauthFlow(profileId);
+    });
   }
 
   // Listen for OAuth callback completion via postMessage
@@ -4993,10 +4823,10 @@ async function openConnectionForm(existing) {
       window.removeEventListener("message", onOAuthMessage);
       const msgEl = document.getElementById("oauth-status-msg");
       if (event.data.success) {
-        if (msgEl) { msgEl.textContent = "Connected!"; msgEl.style.color = "#34d399"; }
+        if (msgEl) { msgEl.textContent = "Connected!"; msgEl.style.color = "var(--success)"; }
         toast("Connected to Salesforce via OAuth!", "success");
       } else {
-        if (msgEl) { msgEl.textContent = event.data.error || "Failed"; msgEl.style.color = "#f87171"; }
+        if (msgEl) { msgEl.textContent = event.data.error || "Failed"; msgEl.style.color = "var(--danger)"; }
         toast(`OAuth failed: ${event.data.error || "Unknown error"}`, "error");
       }
     }
@@ -5011,140 +4841,13 @@ async function openConnectionForm(existing) {
     });
   });
 
-  // Load masked secret presence from Vault when editing a profile with basePath
-  if (isEdit && existing?.id && existing?.vault?.basePath) {
-    api(`/vault/secrets?id=${encodeURIComponent(existing.id)}`).then((res) => {
-      if (!res.available || !res.secrets) return;
-      const fieldMap = {
-        sfUsername: "modal-vault-val-sf-user",
-        sfPassword: "modal-vault-val-sf-pass",
-        oauthConsumerKey: "modal-vault-val-oauth-key",
-        oauthConsumerSecret: "modal-vault-val-oauth-secret",
-        awsAccessKeyId: "modal-vault-val-aws-access-key",
-        awsSecretAccessKey: "modal-vault-val-aws-secret-key",
-        connectInstanceId: "modal-vault-val-connect-instance-id",
-        awsUsername: "modal-vault-val-aws-user",
-        awsPassword: "modal-vault-val-aws-pass",
-        awsAccountId: "modal-vault-val-aws-account",
-        twilioSid: "modal-vault-val-twilio-sid",
-        twilioToken: "modal-vault-val-twilio-token",
-        geminiApiKey: "modal-vault-val-gemini-key",
-      };
-      for (const [key, inputId] of Object.entries(fieldMap)) {
-        if (res.secrets[key]) {
-          const el = document.getElementById(inputId);
-          if (el) el.value = res.secrets[key];
-        }
-      }
-    }).catch(() => { /* Vault unreachable — leave fields empty */ });
-  }
-
-  // Vault base path — toggles between value mode and ref mode
-  const baseInput = document.getElementById("modal-vault-base");
-  if (baseInput) {
-    function updateVaultMode() {
-      const base = baseInput.value.trim();
-      const hasBase = !!base;
-      const isOAuth = document.querySelector('input[name="sf-auth-method"]:checked')?.value === "oauth";
-
-      // Toggle value-mode vs ref-mode sections
-      const show = (id, visible) => { const el = document.getElementById(id); if (el) el.style.display = visible ? "" : "none"; };
-      show("vault-value-mode-info", hasBase);
-      show("cred-vault-sf-vals", hasBase && !isOAuth);
-      show("cred-vault-sf-refs", !hasBase && !isOAuth);
-      show("cred-oauth-vault-vals", hasBase && isOAuth);
-      show("cred-oauth-vault-refs", !hasBase && isOAuth);
-      show("cred-vault-aws-vals", hasBase);
-      show("cred-vault-aws-refs", !hasBase);
-      show("api-keys-vault-vals", hasBase);
-      show("api-keys-vault", !hasBase);
-
-      // Update path hints
-      if (hasBase) {
-        const hints = {
-          "vault-path-hint-sf": `${base}/salesforce`,
-          "vault-path-hint-sf-oauth": `${base}/salesforce`,
-          "vault-path-hint-aws": `${base}/aws`,
-          "vault-path-hint-gemini": `${base}/gemini`,
-        };
-        for (const [id, path] of Object.entries(hints)) {
-          const el = document.getElementById(id);
-          if (el) el.textContent = `\u2192 ${path}`;
-        }
-      }
-
-      // Also auto-populate ref fields (for fallback/advanced mode)
-      if (hasBase) {
-        const groupedRefFields = {
-          "modal-vault-sf-user": "salesforce#username",
-          "modal-vault-sf-pass": "salesforce#password",
-          "modal-vault-oauth-key": "salesforce#consumer_key",
-          "modal-vault-oauth-secret": "salesforce#consumer_secret",
-          "modal-vault-aws-access-key": "aws#access_key_id",
-          "modal-vault-aws-secret-key": "aws#secret_access_key",
-          "modal-vault-connect-instance-id": "aws#connect_instance_id",
-          "modal-vault-aws-user": "aws#username",
-          "modal-vault-aws-pass": "aws#password",
-          "modal-vault-aws-account": "aws#account_id",
-          "modal-vault-twilio-sid": "twilio#account_sid",
-          "modal-vault-twilio-token": "twilio#auth_token",
-          "modal-vault-gemini-key": "gemini#api_key",
-        };
-        for (const [id, subField] of Object.entries(groupedRefFields)) {
-          const el = document.getElementById(id);
-          if (el && !el.dataset.userEdited) el.value = `${base}/${subField}`;
-        }
-      }
-    }
-
-    baseInput.addEventListener("input", updateVaultMode);
-    // Run once on load if base path is pre-populated
-    if (baseInput.value.trim()) setTimeout(updateVaultMode, 0);
-
-    // Track manual edits to vault ref fields
-    document.querySelectorAll(".vault-ref").forEach((input) => {
-      input.addEventListener("input", () => { input.dataset.userEdited = "true"; });
-    });
-  }
-
-  // Vault test button
-  const testBtn = document.getElementById("modal-vault-test-btn");
-  if (testBtn) {
-    testBtn.addEventListener("click", async () => {
-      const addr = document.getElementById("modal-vault-addr").value.trim();
-      const token = document.getElementById("modal-vault-token").value.trim();
-      const resultEl = document.getElementById("vault-test-result");
-      if (!addr || !token) {
-        resultEl.className = "vault-test-fail";
-        resultEl.textContent = "Address and token required";
-        return;
-      }
-      resultEl.className = "vault-test-pending";
-      resultEl.textContent = "Testing...";
-      const testRef = document.getElementById("modal-vault-sf-pass").value.trim();
-      const res = await api("/vault/test", {
-        method: "POST",
-        body: JSON.stringify({ vaultAddr: addr, vaultToken: token, testRef: testRef || undefined }),
-      });
-      if (res.success) {
-        let msg = `Connected (v${res.version})`;
-        if (res.secretAccessible === true) msg += " \u2014 secret accessible";
-        else if (res.secretAccessible === false) msg += " \u2014 secret NOT found";
-        resultEl.className = "vault-test-ok";
-        resultEl.textContent = msg;
-      } else {
-        resultEl.className = "vault-test-fail";
-        resultEl.textContent = res.error || "Connection failed";
-      }
-    });
-  }
-
   document.getElementById("modal-conn-back-btn").addEventListener("click", () => {
     renderConnectionList();
   });
   document.getElementById("modal-conn-save-btn").addEventListener("click", () => saveConnection(existing?.id));
   if (!isEdit) document.getElementById("modal-conn-label").focus();
 }
+
 
 async function startSfOauthFlow(profileId) {
   if (!profileId) {
@@ -5154,24 +4857,7 @@ async function startSfOauthFlow(profileId) {
 
   const msgEl = document.getElementById("oauth-status-msg");
 
-  // Save the auth method to the profile env (preserve current backend selection)
-  if (msgEl) { msgEl.textContent = "Preparing..."; msgEl.style.color = "#94a3b8"; }
-  const currentBackend = document.querySelector('input[name="secrets-backend"]:checked')?.value || "env";
-  const saveCreds = { secretsBackend: currentBackend, sfAuthMethod: "oauth" };
-  // If vault mode, include the consumer key ref so it's available for OAuth
-  if (currentBackend === "vault") {
-    const keyRef = document.getElementById("modal-vault-oauth-key")?.value || "";
-    if (keyRef) saveCreds.oauthConsumerKeyRef = keyRef;
-    const secretRef = document.getElementById("modal-vault-oauth-secret")?.value || "";
-    if (secretRef) saveCreds.oauthConsumerSecretRef = secretRef;
-  }
-  await api("/profile/env", {
-    method: "POST",
-    body: JSON.stringify({
-      id: profileId,
-      credentials: saveCreds,
-    }),
-  });
+  if (msgEl) { msgEl.textContent = "Opening Salesforce..."; msgEl.style.color = "#94a3b8"; }
 
   // Get the authorize URL from the server
   if (msgEl) { msgEl.textContent = "Opening Salesforce..."; msgEl.style.color = "#94a3b8"; }
@@ -5207,142 +4893,69 @@ async function saveConnection(existingId) {
   const label = document.getElementById("modal-conn-label").value.trim();
   const customer = document.getElementById("modal-conn-customer").value.trim();
   const loginUrl = document.getElementById("modal-conn-sf-login").value;
-  const appName = document.getElementById("modal-conn-sf-app").value.trim();
+  const appName = document.getElementById("modal-conn-sf-app")?.value?.trim() || "Service Console";
   const instanceAlias = document.getElementById("modal-conn-alias").value.trim();
   const region = document.getElementById("modal-conn-region").value;
 
-  if (!label) {
-    toast("Connection label is required", "error");
-    return;
-  }
+  if (!label) { toast("Connection label is required", "error"); return; }
 
-  // Determine SF auth method
-  const sfAuthMethod = document.querySelector('input[name="sf-auth-method"]:checked')?.value || "password";
+  const sfAuthMethod = document.getElementById("modal-sf-auth-method").value;
 
-  // Vault config goes to profiles.json (not .env) to avoid regulated mode violations
-  const backend = document.querySelector('input[name="secrets-backend"]:checked')?.value || "env";
-  const vaultPayload = backend === "vault" ? {
-    addr: document.getElementById("modal-vault-addr")?.value?.trim() || "",
-    token: document.getElementById("modal-vault-token")?.value?.trim() || "",
-    basePath: document.getElementById("modal-vault-base")?.value?.trim() || "",
-  } : undefined;
-
-  // Save profile metadata (including vault config)
+  // Save profile metadata
   const payload = {
-    label,
-    customer,
+    label, customer,
     salesforce: { loginUrl, appName },
     connect: { instanceAlias, region },
-    vault: vaultPayload,
   };
+  if (existingId) payload.id = existingId;
+  const profileRes = await api("/profile", {
+    method: existingId ? "PUT" : "POST",
+    body: JSON.stringify(payload),
+  });
+  if (profileRes.error) { toast(profileRes.error, "error"); return; }
 
-  let profileRes;
-  if (existingId) {
-    payload.id = existingId;
-    profileRes = await api("/profile", { method: "PUT", body: JSON.stringify(payload) });
-  } else {
-    profileRes = await api("/profile", { method: "POST", body: JSON.stringify(payload) });
-  }
-
-  if (profileRes.error) {
-    toast(profileRes.error, "error");
-    return;
-  }
-
-  // Save credentials to .env file (vault addr/token already saved to profiles.json above)
   const profileId = existingId || profileRes.id;
   const val = (id) => document.getElementById(id)?.value?.trim() || "";
+  const sensitive = (v) => v && !v.startsWith("\u2022") ? v : undefined;
 
-  const credentials = { secretsBackend: backend, sfAuthMethod };
+  // Collect all credential values — server decides vault vs env based on global config
+  const credentials = {
+    sfAuthMethod,
+    sfInstanceUrl: val("modal-conn-sf-instance-url"),
+    _writeToVault: true,
+  };
 
-  // SF Instance URL (common to all modes)
-  credentials.sfInstanceUrl = val("modal-conn-sf-instance-url");
-
-  if (backend === "vault") {
-    credentials.vaultAddr = val("modal-vault-addr");
-    const basePath = val("modal-vault-base");
-
-    if (basePath) {
-      // Value mode — send actual values; server writes to Vault
-      credentials._writeToVault = true;
-
-      if (sfAuthMethod === "oauth") {
-        const ck = val("modal-vault-val-oauth-key");
-        if (ck && !ck.startsWith("\u2022")) credentials.oauthConsumerKey = ck;
-        const cs = val("modal-vault-val-oauth-secret");
-        if (cs && !cs.startsWith("\u2022")) credentials.oauthConsumerSecret = cs;
-      } else {
-        credentials.sfUsername = val("modal-vault-val-sf-user");
-        const sfPass = val("modal-vault-val-sf-pass");
-        if (sfPass && !sfPass.startsWith("\u2022")) credentials.sfPassword = sfPass;
-      }
-
-      const akid = val("modal-vault-val-aws-access-key");
-      if (akid && !akid.startsWith("\u2022")) credentials.awsAccessKeyId = akid;
-      const asak = val("modal-vault-val-aws-secret-key");
-      if (asak && !asak.startsWith("\u2022")) credentials.awsSecretAccessKey = asak;
-      credentials.connectInstanceId = val("modal-vault-val-connect-instance-id");
-
-      // Legacy AWS login (optional)
-      credentials.awsUsername = val("modal-vault-val-aws-user");
-      const awsPass = val("modal-vault-val-aws-pass");
-      if (awsPass && !awsPass.startsWith("\u2022")) credentials.awsPassword = awsPass;
-      credentials.awsAccountId = val("modal-vault-val-aws-account");
-
-      // Twilio (optional)
-      credentials.twilioSid = val("modal-vault-val-twilio-sid");
-      const twilioToken = val("modal-vault-val-twilio-token");
-      if (twilioToken && !twilioToken.startsWith("\u2022")) credentials.twilioToken = twilioToken;
-      credentials.twilioFromNumber = val("modal-vault-val-twilio-from");
-      credentials.connectEntrypoint = val("modal-vault-val-connect-entry");
-
-      // AI Providers (NL Caller)
-      const geminiKey = val("modal-vault-val-gemini-key");
-      if (geminiKey && !geminiKey.startsWith("\u2022")) credentials.geminiApiKey = geminiKey;
-    } else {
-      // Ref mode — advanced: user types Vault path references manually
-      credentials.awsAccessKeyIdRef = val("modal-vault-aws-access-key");
-      credentials.awsSecretAccessKeyRef = val("modal-vault-aws-secret-key");
-      credentials.connectInstanceIdRef = val("modal-vault-connect-instance-id");
-
-      if (sfAuthMethod === "oauth") {
-        credentials.oauthConsumerKeyRef = val("modal-vault-oauth-key");
-        credentials.oauthConsumerSecretRef = val("modal-vault-oauth-secret");
-      } else {
-        credentials.sfUsernameRef = val("modal-vault-sf-user");
-        credentials.sfPasswordRef = val("modal-vault-sf-pass");
-      }
-
-      credentials.awsUsernameRef = val("modal-vault-aws-user");
-      credentials.awsPasswordRef = val("modal-vault-aws-pass");
-      credentials.awsAccountIdRef = val("modal-vault-aws-account");
-      credentials.twilioSidRef = val("modal-vault-twilio-sid");
-      credentials.twilioTokenRef = val("modal-vault-twilio-token");
-      credentials.twilioFromNumber = val("modal-vault-twilio-from");
-      credentials.connectEntrypoint = val("modal-vault-connect-entry");
-      credentials.geminiApiKeyRef = val("modal-vault-gemini-key");
-    }
+  if (sfAuthMethod === "oauth") {
+    const ck = sensitive(val("modal-cred-oauth-key"));
+    if (ck) credentials.oauthConsumerKey = ck;
   } else {
-    // Direct env mode
-    if (sfAuthMethod !== "oauth") {
-      credentials.sfUsername = val("modal-cred-sf-user");
-      const sfPass = val("modal-cred-sf-pass");
-      if (sfPass && !sfPass.startsWith("\u2022")) credentials.sfPassword = sfPass;
-    }
-    credentials.awsUsername = val("modal-cred-aws-user");
-    const awsPass = val("modal-cred-aws-pass");
-    if (awsPass && !awsPass.startsWith("\u2022")) credentials.awsPassword = awsPass;
-    credentials.awsAccountId = val("modal-cred-aws-account");
-    credentials.twilioSid = val("modal-cred-twilio-sid");
-    const twilioToken = val("modal-cred-twilio-token");
-    if (twilioToken && !twilioToken.startsWith("\u2022")) credentials.twilioToken = twilioToken;
-    credentials.twilioFromNumber = val("modal-cred-twilio-from");
-    credentials.connectEntrypoint = val("modal-cred-connect-entry");
-
-    // AI Provider keys (NL Caller)
-    const geminiKey = val("modal-cred-gemini-key");
-    if (geminiKey && !geminiKey.startsWith("\u2022")) credentials.geminiApiKey = geminiKey;
+    credentials.sfUsername = val("modal-cred-sf-user");
+    const sfPass = sensitive(val("modal-cred-sf-pass"));
+    if (sfPass) credentials.sfPassword = sfPass;
   }
+
+  const awsKey = sensitive(val("modal-cred-aws-access-key"));
+  if (awsKey) credentials.awsAccessKeyId = awsKey;
+  const awsSecret = sensitive(val("modal-cred-aws-secret-key"));
+  if (awsSecret) credentials.awsSecretAccessKey = awsSecret;
+  credentials.connectInstanceId = val("modal-cred-connect-instance-id");
+
+  // Legacy AWS login (Advanced section)
+  credentials.awsUsername = val("modal-cred-aws-user");
+  const awsPass = sensitive(val("modal-cred-aws-pass"));
+  if (awsPass) credentials.awsPassword = awsPass;
+  credentials.awsAccountId = val("modal-cred-aws-account");
+
+  // Twilio
+  credentials.twilioSid = val("modal-cred-twilio-sid");
+  const twilioToken = sensitive(val("modal-cred-twilio-token"));
+  if (twilioToken) credentials.twilioToken = twilioToken;
+  credentials.twilioFromNumber = val("modal-cred-twilio-from");
+  credentials.connectEntrypoint = val("modal-cred-connect-entry");
+
+  // AI Providers
+  const geminiKey = sensitive(val("modal-cred-gemini-key"));
+  if (geminiKey) credentials.geminiApiKey = geminiKey;
 
   const envRes = await api("/profile/env", {
     method: "POST",
@@ -5354,7 +4967,7 @@ async function saveConnection(existingId) {
     toast(`Profile saved but credentials failed: ${envRes.error}${detail}`, "error");
   } else {
     let msg = existingId ? "Connection updated" : `Connection "${label}" created`;
-    if (envRes.vaultWritten?.length) msg += ` (secrets written to Vault: ${envRes.vaultWritten.join(", ")})`;
+    if (envRes.vaultWritten?.length) msg += ` — secrets stored in Vault`;
     toast(msg, "success");
   }
 
@@ -5686,6 +5299,15 @@ const resultsState = {
 document.getElementById("btn-results")?.addEventListener("click", () => {
   if (!resultsState.available) {
     toast("Database not configured. Set DATABASE_URL in environment or Advanced Settings.", "error");
+    return;
+  }
+  openResults();
+});
+
+// Viewer landing shortcut
+document.getElementById("btn-start-results")?.addEventListener("click", () => {
+  if (!resultsState.available) {
+    toast("Database not configured.", "error");
     return;
   }
   openResults();

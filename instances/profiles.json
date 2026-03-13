@@ -35,6 +35,82 @@
         },
         "selectorOverrides": {}
       }
+    },
+    {
+      "id": "agentforce-org2",
+      "label": "Agentforce org2",
+      "customer": "",
+      "envFile": "instances/agentforce-org2.env",
+      "salesforce": {
+        "loginUrl": "https://login.salesforce.com",
+        "appName": "Service Console"
+      },
+      "connect": {
+        "region": "us-west-2",
+        "instanceAlias": ""
+      },
+      "vault": {
+        "addr": "http://127.0.0.1:8200",
+        "basePath": "secret/data/voice/agentforce-org2"
+      },
+      "discovery": {
+        "autoDiscover": true,
+        "cacheFile": ".cache/org-vocabulary-agentforce-org2.json",
+        "cacheTtlMinutes": 60
+      },
+      "vocabulary": {
+        "omniTargetStatus": null,
+        "queues": {},
+        "skills": {},
+        "ivrFlows": {},
+        "routing": {
+          "defaultType": "queue",
+          "skillBasedEnabled": false
+        },
+        "supervisor": {
+          "surfaceName": null,
+          "appName": null
+        },
+        "selectorOverrides": {}
+      }
+    },
+    {
+      "id": "cdo-org",
+      "label": "CDO Org",
+      "customer": "",
+      "envFile": "instances/cdo-org.env",
+      "salesforce": {
+        "loginUrl": "https://login.salesforce.com",
+        "appName": "Service Console"
+      },
+      "connect": {
+        "region": "us-west-2",
+        "instanceAlias": ""
+      },
+      "vault": {
+        "addr": "http://host.docker.internal:8200",
+        "basePath": "secret/data/voice/cdo-org"
+      },
+      "discovery": {
+        "autoDiscover": true,
+        "cacheFile": ".cache/org-vocabulary-cdo-org.json",
+        "cacheTtlMinutes": 60
+      },
+      "vocabulary": {
+        "omniTargetStatus": null,
+        "queues": {},
+        "skills": {},
+        "ivrFlows": {},
+        "routing": {
+          "defaultType": "queue",
+          "skillBasedEnabled": false
+        },
+        "supervisor": {
+          "surfaceName": null,
+          "appName": null
+        },
+        "selectorOverrides": {}
+      }
     }
   ]
 }

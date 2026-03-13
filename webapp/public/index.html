@@ -28,17 +28,23 @@
         <select id="suite-selector" class="suite-select">
           <option value="">Loading suites...</option>
         </select>
-        <button class="btn btn-ghost btn-sm" id="btn-suite-settings" title="Suite settings">&#x2699;</button>
-        <button class="btn btn-outline btn-sm" id="btn-suite-create">+ Suite</button>
+        <button class="btn btn-ghost btn-sm role-builder" id="btn-suite-settings" title="Suite settings">&#x2699;</button>
+        <button class="btn btn-outline btn-sm role-builder" id="btn-suite-create">+ Suite</button>
         <div class="top-divider"></div>
         <button class="btn btn-ghost btn-sm" id="btn-results" title="View run history">Results</button>
         <div class="top-divider"></div>
-        <div class="setup-menu" id="setup-menu">
+        <div class="setup-menu role-builder" id="setup-menu">
           <button class="btn btn-ghost btn-sm setup-trigger" id="btn-setup" title="Setup">&#x2699; Setup</button>
           <div class="setup-dropdown hidden" id="setup-dropdown">
             <button class="setup-item" id="btn-connections"><span class="setup-item-icon">&#x1F517;</span> Connections</button>
+            <button class="setup-item" id="btn-vault-settings"><span class="setup-item-icon">&#x1F511;</span> Vault Settings</button>
             <button class="setup-item" id="btn-advanced-settings"><span class="setup-item-icon">&#x2638;</span> Advanced Settings</button>
           </div>
+        </div>
+        <div class="user-menu" id="user-menu" style="display:none">
+          <div class="top-divider"></div>
+          <span class="user-name" id="user-display-name"></span>
+          <button class="btn btn-ghost btn-sm" id="btn-logout" title="Sign out">Logout</button>
         </div>
       </div>
     </header>
@@ -50,8 +56,8 @@
         <div class="sidebar-header">
           <h3>Scenarios</h3>
           <div class="sidebar-header-actions">
-            <button class="btn btn-primary btn-sm" id="btn-new-scenario">+ New</button>
-            <button class="btn btn-success btn-sm" id="btn-run-suite" title="Run all scenarios">Run</button>
+            <button class="btn btn-primary btn-sm role-builder" id="btn-new-scenario">+ New</button>
+            <button class="btn btn-success btn-sm role-builder" id="btn-run-suite" title="Run all scenarios">Run</button>
           </div>
         </div>
         <div class="scenario-list" id="scenario-list">
@@ -67,8 +73,9 @@
           <h2>Build Test Scenarios Visually</h2>
           <p>Create end-to-end voice call test cases with a guided wizard.<br/>No framework knowledge required.</p>
           <div class="landing-actions">
-            <button class="btn btn-primary btn-lg" id="btn-start-new">Create New Scenario</button>
-            <button class="btn btn-outline btn-lg" id="btn-start-edit">Edit Existing</button>
+            <button class="btn btn-primary btn-lg role-builder" id="btn-start-new">Create New Scenario</button>
+            <button class="btn btn-outline btn-lg role-builder" id="btn-start-edit">Edit Existing</button>
+            <button class="btn btn-primary btn-lg role-viewer-only" id="btn-start-results" style="display:none">View Run Results</button>
           </div>
         </div>
 
@@ -78,7 +85,7 @@
           <div class="editing-banner hidden" id="editing-banner">
             <span class="eb-label">Editing:</span>
             <span class="eb-name" id="editing-name"></span>
-            <button class="btn btn-ghost btn-sm" id="btn-cancel-edit">Cancel</button>
+            <button class="btn btn-ghost btn-sm role-builder" id="btn-cancel-edit">Cancel</button>
           </div>
 
           <!-- Progress -->
@@ -94,8 +101,8 @@
             <!-- Steps injected dynamically -->
           </div>
 
-          <!-- Nav -->
-          <div class="wizard-nav">
+          <!-- Nav (builders only) -->
+          <div class="wizard-nav role-builder">
             <button class="btn btn-outline" id="btn-back" disabled>Back</button>
             <div class="wizard-nav-right">
               <button class="btn btn-ghost" id="btn-preview">Preview JSON</button>
@@ -104,8 +111,8 @@
           </div>
         </div>
 
-        <!-- JSON Preview panel -->
-        <div class="preview-panel hidden" id="preview-panel">
+        <!-- JSON Preview panel (builders only) -->
+        <div class="preview-panel hidden role-builder" id="preview-panel">
           <div class="preview-header">
             <h3>Generated Scenario</h3>
             <div class="preview-actions">
@@ -125,8 +132,8 @@
             <div id="preview-flow" class="preview-flow hidden"></div>
           </div>
           <div class="preview-footer">
-            <button class="btn btn-outline" id="btn-back-to-edit">Edit Scenario</button>
-            <button class="btn btn-primary" id="btn-save-scenario">Save to Suite</button>
+            <button class="btn btn-outline role-builder" id="btn-back-to-edit">Edit Scenario</button>
+            <button class="btn btn-primary role-builder" id="btn-save-scenario">Save to Suite</button>
           </div>
         </div>
 
@@ -241,6 +248,7 @@
     <div class="toast-container" id="toast-container"></div>
   </div>
 
+  <script src="/auth.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -38,9 +38,9 @@ export function scenarioToEnv(scenario, defaults = {}) {
 
   // ── Call trigger ──────────────────────────────────────────────────────
   env.CALL_TRIGGER_MODE = callTrigger.mode ?? "connect_ccp";
-  // NL Caller mode always uses "dial_only" expectation — no agent offer/screen pop needed
+  // NL Caller defaults to "dial_only" — use "agent_offer" explicitly for escalation scenarios
   env.CALL_EXPECTATION = callTrigger.mode === "nl_caller"
-    ? (callTrigger.expectation ?? "dial_only")
+    ? (callTrigger.expectation === "agent_offer" ? "agent_offer" : (callTrigger.expectation ?? "dial_only"))
     : (callTrigger.expectation ?? "agent_offer");
 
   // ── Dial-only (AI Agent / Agentforce) ─────────────────────────────
@@ -73,6 +73,17 @@ export function scenarioToEnv(scenario, defaults = {}) {
     if (callTrigger.verifyAgentforceTab) {
       env.VERIFY_AGENTFORCE_TAB = "true";
     }
+    if (callTrigger.requireConnectedCall === false) {
+      env.SKIP_CONNECTED_CALL_CHECK = "true";
+    }
+  }
+
+  // ── Common callTrigger flags (apply to all modes) ────────────────────
+  if (callTrigger.requireConnectedCall === false) {
+    env.SKIP_CONNECTED_CALL_CHECK = "true";
+  }
+  if (callTrigger.verifyAgentforceTab) {
+    env.VERIFY_AGENTFORCE_TAB = "true";
   }
 
   // Routing type (queue, skill, direct_agent, extension)
@@ -163,6 +174,9 @@ export function scenarioToEnv(scenario, defaults = {}) {
     if (nlCaller.tone) env.NL_CALLER_TONE = nlCaller.tone;
     if (nlCaller.voice) env.NL_CALLER_VOICE = nlCaller.voice;
     if (nlCaller.accent) env.NL_CALLER_ACCENT = nlCaller.accent;
+    if (nlCaller.vadSilenceDurationMs != null) env.NL_CALLER_VAD_SILENCE_MS = String(nlCaller.vadSilenceDurationMs);
+    if (nlCaller.vadSensitivity) env.NL_CALLER_VAD_SENSITIVITY = nlCaller.vadSensitivity;
+    if (nlCaller.maxDurationSec != null) env.NL_CALLER_MAX_DURATION_SEC = String(nlCaller.maxDurationSec);
   }
   // Conversation assertions
   if (scenario.conversationAssertions?.length > 0) {

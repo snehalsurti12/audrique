@@ -43,51 +43,78 @@ export type AgentforceObserverSession = {
  * Follows the same pattern as ensureSupervisorServiceRepsSurfaceOpen.
  */
 export async function ensureAgentforceTabOpen(page: Page): Promise<void> {
-  const deadline = Date.now() + 20_000;
+  // Salesforce LWC uses closed shadow roots — page.evaluate() DOM traversal returns null
+  // for el.shadowRoot on closed roots. Use Playwright's CDP-based locators (getByText,
+  // getByRole) which pierce all shadow roots regardless of open/closed mode.
+
+  // Try clicking a visible element whose text matches the pattern.
+  // Iterates all matches so we can skip excluded ones (e.g. Service Console "More" button).
+  async function playwrightClick(
+    textPattern: RegExp,
+    excludeAriaLabel?: RegExp
+  ): Promise<boolean> {
+    const matches = page.getByText(textPattern);
+    const count = await matches.count().catch(() => 0);
+    for (let i = 0; i < count; i++) {
+      const el = matches.nth(i);
+      const ariaLabel = (await el.getAttribute("aria-label").catch(() => "")) ?? "";
+      if (excludeAriaLabel && excludeAriaLabel.test(ariaLabel)) continue;
+      await el.click({ force: true }).catch(() => undefined);
+      return true;
+    }
+    return false;
+  }
+
+  // Log what text nodes are present near the sub-navigation for diagnostics
+  const navTexts = await page.evaluate(() => {
+    const all = Array.from(document.querySelectorAll("*"));
+    return all
+      .map((el) => (el as HTMLElement).innerText?.trim())
+      .filter((t) => t && t.length < 40 && /agentforce|in.progress|more/i.test(t))
+      .slice(0, 20);
+  }).catch(() => [] as string[]);
+  console.log(`[agentforce-observer] Sub-nav text nodes found: ${JSON.stringify(navTexts)}`);
+
+  const deadline = Date.now() + 30_000;
+  let attempt = 0;
   while (Date.now() < deadline) {
-    // Try role-based tab first
-    const tab = page
-      .getByRole("tab", { name: /agentforce/i })
-      .first();
-    if ((await tab.count()) > 0 && (await tab.isVisible().catch(() => false))) {
-      const selected = (
-        (await tab.getAttribute("aria-selected").catch(() => "")) ?? ""
-      ).toLowerCase();
-      if (selected === "true") {
-        return;
-      }
-      await tab.click({ force: true }).catch(() => undefined);
-      await page.waitForTimeout(600);
-      const selectedAfter = (
-        (await tab.getAttribute("aria-selected").catch(() => "")) ?? ""
-      ).toLowerCase();
-      if (selectedAfter === "true") {
+    attempt++;
+
+    // Step 1: Check if Agentforce is directly visible (already expanded or as a tab)
+    const agentforceVisible = await page.getByText(/agentforce/i).first().isVisible().catch(() => false);
+    if (agentforceVisible) {
+      const clicked = await playwrightClick(/^agentforce$/i);
+      if (clicked) {
+        console.log(`[agentforce-observer] Clicked Agentforce tab (attempt ${attempt})`);
+        await page.waitForTimeout(800);
         return;
       }
     }
 
-    // Fallback: any clickable element with text "Agentforce"
-    const fallback = page
-      .locator("a, button, li, div[role='tab'], div[role='button']")
-      .filter({ hasText: /agentforce/i })
-      .first();
-    if (
-      (await fallback.count()) > 0 &&
-      (await fallback.isVisible().catch(() => false))
-    ) {
-      await fallback.click({ force: true }).catch(() => undefined);
-      await page.waitForTimeout(600);
-      // Verify we're on the right tab by checking for KPI cards or table
-      const snap = await readAgentforceActiveCount(page);
-      if (snap.source !== "none") {
-        return;
+    // Step 2: Click "More" to expand hidden nav items.
+    // The Command Center sub-nav "More ▼" button text starts with "More".
+    // Exclude the Service Console tab-bar "More" (aria-label="Show additional tabs").
+    const moreVisible = await page.getByText(/^more/i).first().isVisible().catch(() => false);
+    if (moreVisible) {
+      const clicked = await playwrightClick(/^more/i, /additional tabs/i);
+      if (clicked) {
+        console.log(`[agentforce-observer] Clicked 'More' dropdown (attempt ${attempt})`);
+        await page.waitForTimeout(800);
+        continue; // next iteration will find Agentforce in the open dropdown
       }
+    }
+
+    // Diagnostic: log what getByText finds on each failed attempt (first 3 only)
+    if (attempt <= 3) {
+      const moreCount = await page.getByText(/^more/i).count().catch(() => 0);
+      const afCount = await page.getByText(/agentforce/i).count().catch(() => 0);
+      console.log(`[agentforce-observer] Attempt ${attempt}: getByText('More') count=${moreCount}, getByText('Agentforce') count=${afCount}`);
     }
 
     await page.waitForTimeout(500);
   }
   console.warn(
-    "[agentforce-observer] Could not find/click Agentforce tab after 20s — continuing anyway."
+    "[agentforce-observer] Could not find/click Agentforce tab after 30s — continuing anyway."
   );
 }
 
@@ -219,19 +246,45 @@ export async function startAgentforceObserver(args: {
   await gotoWithLightningRedirectTolerance(page, args.targetUrl);
   await assertAuthenticatedConsolePage(page);
 
-  // Navigate to Command Center for Service app
+  // Navigate to Command Center for Service app.
+  // Only try supervisor-specific app names — never fall back to the agent app (e.g. Service Console)
+  // since that app does not have the Agentforce tab and would silently produce a false success.
   const appCandidates = [
     args.supervisorAppName || "Command Center for Service",
     "Command Center for Service",
-    args.appName,
-  ].filter((name) => name.trim().length > 0);
-  try {
-    await ensureAnySalesforceApp(page, appCandidates);
-  } catch {
+  ].filter((name, i, arr) => name.trim().length > 0 && arr.indexOf(name) === i);
+
+  let navigatedToSupervisorApp = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await ensureAnySalesforceApp(page, appCandidates);
+      navigatedToSupervisorApp = true;
+      console.log(`[agentforce-observer] Navigated to supervisor app (attempt ${attempt}). URL=${page.url()}`);
+      break;
+    } catch (err) {
+      console.warn(`[agentforce-observer] Navigation attempt ${attempt}/3 failed: ${err instanceof Error ? err.message : err}`);
+      if (attempt < 3) {
+        await page.waitForTimeout(2000);
+      }
+    }
+  }
+
+  if (!navigatedToSupervisorApp) {
+    console.error(`[agentforce-observer] Could not open Command Center for Service after 3 attempts. Current URL=${page.url()} — Agentforce tab search aborted.`);
+    await page
+      .screenshot({ path: "test-results/agentforce-observer-nav-failed.png", fullPage: false })
+      .catch(() => undefined);
     await dismissPresenceAppSwitchBanner(page);
+    // Fall through with best-effort — page may already be in Command Center from a prior nav
   }
 
   await page.waitForTimeout(2000);
+
+  // Confirm we're on the right page before looking for the Agentforce tab
+  await page
+    .screenshot({ path: "test-results/agentforce-observer-before-tab.png", fullPage: false })
+    .catch(() => undefined);
+  console.log(`[agentforce-observer] Page before tab search: URL=${page.url()} title="${await page.title().catch(() => "")}"`);
 
   // Click the Agentforce tab
   await ensureAgentforceTabOpen(page);
@@ -323,7 +376,12 @@ export async function waitForAgentforceCount(
         `[agentforce-observer] Poll error: ${err}`
       );
     }
-    await page.waitForTimeout(3000);
+    try {
+      await page.waitForTimeout(3000);
+    } catch {
+      // Page closed or test ended — stop polling gracefully
+      break;
+    }
   }
 
   console.warn(

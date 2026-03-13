@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: audrique
       POSTGRES_PASSWORD: audrique_dev
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -33,6 +33,11 @@ services:
       - PW_HEADLESS=true
       - PW_USE_FAKE_MEDIA=true
       - DATABASE_URL=postgres://audrique:audrique_dev@postgres:5432/audrique
+      - AUTH_ENABLED=${AUTH_ENABLED:-true}
+      - JWT_SECRET
+      - RESEND_API_KEY
+      - TURNSTILE_SECRET_KEY
+      - AUTH_BASE_URL=${AUTH_BASE_URL:-http://localhost:4200}
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,6 +46,27 @@ services:
       - seccomp=unconfined
     # Shared memory for Chromium (default 64MB is too small)
     shm_size: "1gb"
+
+  # Internal admin dashboard (not publicly exposed)
+  # Usage: docker compose --profile admin up admin
+  admin:
+    build: .
+    command: ["node", "webapp/admin/server.mjs"]
+    ports:
+      - "4201:4201"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgres://audrique:audrique_dev@postgres:5432/audrique
+      - AUTH_ENABLED=true
+      - JWT_SECRET=${JWT_SECRET:-}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - AUTH_BASE_URL=${AUTH_BASE_URL:-http://localhost:4200}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - admin
 
   # Run a test suite instead of Studio
   # Usage: docker compose run --rm test

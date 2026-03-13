@@ -70,7 +70,7 @@ export function sanitizeString(str, maxLen = 1000) {
  */
 export async function setTenantContext(client, tenantId) {
   if (!isValidUUID(tenantId)) throw new Error("Invalid tenant ID");
-  await client.query("SET LOCAL app.current_tenant_id = $1", [tenantId]);
+  await client.query("SELECT set_config('app.current_tenant_id', $1, true)", [tenantId]);
 }
 
 // ── Rate Limiting ───────────────────────────────────────────────────────────

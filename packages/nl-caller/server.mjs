@@ -203,13 +203,78 @@ export function createNlCallerServer(opts) {
 
   /**
    * Start a tunnel exposing the server to the internet.
-   * Tries localtunnel (npm) first, falls back to cloudflared.
+   * Tries cloudflared first (Cloudflare-backed, reliable), falls back to localtunnel.
    * @returns {Promise<string>} public HTTPS URL
    */
   async function startTunnel() {
     if (tunnelUrl) return tunnelUrl;
 
-    // Try localtunnel first (npm-based, more reliable)
+    // Kill any orphaned cloudflared processes from prior runs
+    try {
+      const { execSync } = await import("node:child_process");
+      execSync(`pkill -f "cloudflared tunnel --url http://localhost:${port}" 2>/dev/null`, { stdio: "ignore" });
+    } catch { /* no orphans */ }
+
+    // Try cloudflared first — Cloudflare-backed, no port-refusal issues like localtunnel.me
+    logger.log("[nl-caller] Starting cloudflared tunnel...");
+    try {
+      const url = await new Promise((resolve, reject) => {
+        const proc = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${port}`], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        tunnelProcess = proc;
+
+        let resolved = false;
+        const timeout = setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            proc.kill();
+            tunnelProcess = null;
+            reject(new Error("cloudflared startup timed out after 20s"));
+          }
+        }, 20000);
+
+        let pendingUrl = null;
+        proc.stderr.on("data", (chunk) => {
+          const line = chunk.toString();
+          const match = line.match(/(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/);
+          if (match) {
+            pendingUrl = match[1];
+            logger.log(`[nl-caller] Cloudflared URL: ${pendingUrl} (waiting for connection...)`);
+          }
+          if (pendingUrl && !resolved && /Registered tunnel connection/.test(line)) {
+            resolved = true;
+            clearTimeout(timeout);
+            resolve(pendingUrl);
+          }
+        });
+
+        proc.on("error", (err) => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            reject(new Error(`Failed to start cloudflared: ${err.message}`));
+          }
+        });
+
+        proc.on("exit", (code) => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            reject(new Error(`cloudflared exited with code ${code}`));
+          }
+        });
+      });
+
+      tunnelUrl = url;
+      logger.log(`[nl-caller] Cloudflared connected: ${tunnelUrl}`);
+      return tunnelUrl;
+    } catch (err) {
+      logger.log(`[nl-caller] Cloudflared failed: ${err.message} — falling back to localtunnel`);
+      tunnelProcess = null;
+    }
+
+    // Fallback: localtunnel (free service, occasionally refuses connections)
     try {
       const localtunnel = (await import("localtunnel")).default;
       logger.log("[nl-caller] Starting localtunnel...");
@@ -218,72 +283,13 @@ export function createNlCallerServer(opts) {
       tunnelUrl = lt.url;
       logger.log(`[nl-caller] Localtunnel ready: ${tunnelUrl}`);
 
-      lt.on("close", () => {
-        logger.log("[nl-caller] Localtunnel closed");
-      });
-      lt.on("error", (err) => {
-        logger.error("[nl-caller] Localtunnel error:", err.message);
-      });
+      lt.on("close", () => { logger.log("[nl-caller] Localtunnel closed"); });
+      lt.on("error", (err) => { logger.error("[nl-caller] Localtunnel error:", err.message); });
 
       return tunnelUrl;
     } catch (err) {
-      logger.log(`[nl-caller] Localtunnel failed: ${err.message}, falling back to cloudflared`);
+      throw new Error(`All tunnel providers failed. Last error: ${err.message}`);
     }
-
-    // Fallback: cloudflared
-    // Kill any orphaned cloudflared processes from prior runs
-    try {
-      const { execSync } = await import("node:child_process");
-      execSync(`pkill -f "cloudflared tunnel --url http://localhost:${port}" 2>/dev/null`, { stdio: "ignore" });
-    } catch { /* no orphans */ }
-
-    return new Promise((resolve, reject) => {
-      const proc = spawn("cloudflared", ["tunnel", "--url", `http://localhost:${port}`], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      tunnelProcess = proc;
-
-      let resolved = false;
-      const timeout = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          reject(new Error("Tunnel startup timed out after 15s"));
-        }
-      }, 15000);
-
-      let pendingUrl = null;
-      proc.stderr.on("data", (chunk) => {
-        const line = chunk.toString();
-        const match = line.match(/(https:\/\/[a-z0-9-]+\.trycloudflare\.com)/);
-        if (match) {
-          pendingUrl = match[1];
-          logger.log(`[nl-caller] Cloudflared URL: ${pendingUrl} (waiting for connection...)`);
-        }
-        if (pendingUrl && !resolved && /Registered tunnel connection/.test(line)) {
-          resolved = true;
-          clearTimeout(timeout);
-          tunnelUrl = pendingUrl;
-          logger.log(`[nl-caller] Cloudflared connected: ${tunnelUrl}`);
-          resolve(tunnelUrl);
-        }
-      });
-
-      proc.on("error", (err) => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          reject(new Error(`Failed to start cloudflared: ${err.message}`));
-        }
-      });
-
-      proc.on("exit", (code) => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          reject(new Error(`cloudflared exited with code ${code}`));
-        }
-      });
-    });
   }
 
   async function close() {

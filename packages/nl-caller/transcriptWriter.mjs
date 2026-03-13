@@ -127,6 +127,33 @@ export function evaluateAssertions(transcript, assertions, opts = {}) {
         break;
       }
 
+      case "escalation_detected": {
+        // Check agentforce turns for escalation language
+        const escalationPhrases = [
+          "transfer", "transferring", "connect you with", "connect you to",
+          "specialist", "human agent", "live agent", "representative",
+          "hold while", "please hold", "one moment", "escalat",
+        ];
+        const agentforceTurns = transcript.filter((t) => t.speaker === "agentforce");
+        const callerTurns = transcript.filter((t) => t.speaker === "caller");
+        const agentText = agentforceTurns.map((t) => t.text.toLowerCase()).join(" ");
+        const callerText = callerTurns.map((t) => t.text.toLowerCase()).join(" ");
+        // Escalation detected if Agentforce used escalation language OR caller acknowledged transfer
+        const agentEscalated = escalationPhrases.some((p) => agentText.includes(p));
+        const callerAcknowledgedTransfer = /transfer|live agent|human agent|escalat|hold|speak with/.test(callerText);
+        const passed = agentEscalated || callerAcknowledgedTransfer;
+        results.push({
+          type: assertion.type,
+          passed,
+          detail: passed
+            ? agentEscalated
+              ? "Agentforce used escalation language"
+              : "Caller acknowledged transfer/escalation"
+            : "No escalation detected in conversation",
+        });
+        break;
+      }
+
       default:
         results.push({
           type: assertion.type,

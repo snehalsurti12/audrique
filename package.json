@@ -1,6 +1,6 @@
 {
   "name": "audrique",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "End-to-end testing framework for contact centers. Coordinates voice call automation, CRM verification, and telephony validation in declarative test scenarios.",
   "type": "module",
   "license": "MIT",
@@ -57,9 +57,11 @@
     "youtube:build": "node scripts/build-youtube-video.mjs",
     "youtube:full": "node scripts/record-youtube-walkthrough.mjs && node scripts/build-youtube-video.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && npm run test:ui"
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "test": "npm run typecheck && npm run test:unit && npm run test:ui"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "ffmpeg-static": "^5.3.0",
     "localtunnel": "^2.0.2",
     "pg": "^8.13.0",

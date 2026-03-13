@@ -25,6 +25,20 @@ import {
   isValidUUID, sanitizePagination, sanitizeDays, sanitizeString,
   checkRateLimit, setSecurityHeaders, logAudit,
 } from "./db/security.mjs";
+import { handleAuthRoutes } from "./auth/routes.mjs";
+import { requireAuth, requireRole } from "./auth/middleware.mjs";
+import * as platformSettingsQ from "./db/queries/platform-settings.mjs";
+import * as platformProfilesQ from "./db/queries/platform-profiles.mjs";
+import {
+  maskSensitiveValues,
+  VAULT_SECRET_GROUPS,
+  buildVaultRefsFromBasePath,
+  resolveVaultRef,
+  generateEnvContent,
+} from "./lib/credentials.mjs";
+import { migrateFileProfilesToDb, buildProfileFromDbRow } from "./lib/profiles.mjs";
+
+const AUTH_ENABLED = (process.env.AUTH_ENABLED || "").toLowerCase() === "true";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, "..");
@@ -182,7 +196,7 @@ function sendFile(res, filePath, contentType) {
   fs.createReadStream(resolved).pipe(res);
 }
 
-// ── MIME types ───────────────────────────────────────────────────────────────
+// ── MIME types (served by static file handler) ───────────────────────────────
 const MIME = {
   ".html": "text/html",
   ".css": "text/css",
@@ -195,22 +209,6 @@ const MIME = {
 };
 
 // ── .env file helpers ────────────────────────────────────────────────────────
-
-const SENSITIVE_PATTERNS = [/PASSWORD/i, /TOKEN/i, /SECRET/i, /API_KEY/i, /PRIVATE_KEY/i, /AUTH_TOKEN/i];
-const SENSITIVE_KEYS = new Set([
-  "SF_PASSWORD", "SF_EMAIL_CODE", "AWS_PASSWORD",
-  "TWILIO_AUTH_TOKEN", "VAULT_TOKEN", "SF_OAUTH_CONSUMER_SECRET",
-  "GEMINI_API_KEY",
-]);
-
-const NON_SENSITIVE_KEYS = new Set(["SECRETS_BACKEND", "REGULATED_MODE"]);
-
-function isSensitiveKey(key) {
-  if (NON_SENSITIVE_KEYS.has(key)) return false;
-  if (SENSITIVE_KEYS.has(key)) return true;
-  if (key.endsWith("_REF")) return false; // Vault refs are not sensitive
-  return SENSITIVE_PATTERNS.some((p) => p.test(key));
-}
 
 function parseEnvFile(filePath) {
   const resolved = path.resolve(PROJECT_ROOT, filePath);
@@ -232,6 +230,30 @@ function parseEnvFile(filePath) {
 // ── Vault Auth (gitignored, stores tokens per profile) ─────────────────────
 const VAULT_AUTH_PATH = path.resolve(PROJECT_ROOT, "instances", ".vault-auth.json");
 
+// ── Global Vault Config (gitignored, one-time super-admin setup) ────────────
+const VAULT_CONFIG_PATH = path.resolve(PROJECT_ROOT, "instances", ".vault-config.json");
+
+function readVaultConfig() {
+  if (!fs.existsSync(VAULT_CONFIG_PATH)) return {};
+  try { return JSON.parse(fs.readFileSync(VAULT_CONFIG_PATH, "utf8")); } catch { return {}; }
+}
+
+function writeVaultConfig(data) {
+  fs.mkdirSync(path.dirname(VAULT_CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(VAULT_CONFIG_PATH, JSON.stringify(data, null, 2));
+}
+
+// Resolve vault settings for a profile: per-profile config wins, falls back to global
+function resolveVaultSettings(profile) {
+  const global = readVaultConfig();
+  const addr = profile.vault?.addr || global.addr || "";
+  const globalBase = global.basePath ? global.basePath.replace(/\/+$/, "") : "";
+  // Per-profile basePath wins; or auto-derive: {globalBase}/{profile.id}
+  const basePath = profile.vault?.basePath || (globalBase ? `${globalBase}/${profile.id}` : "");
+  const token = getVaultToken(profile.id) || getVaultToken("_global");
+  return { addr, basePath, token };
+}
+
 function readVaultAuth() {
   if (!fs.existsSync(VAULT_AUTH_PATH)) return {};
   try { return JSON.parse(fs.readFileSync(VAULT_AUTH_PATH, "utf8")); } catch { return {}; }
@@ -252,59 +274,6 @@ function setVaultToken(profileId, token) {
   if (!auth[profileId]) auth[profileId] = {};
   auth[profileId].token = token;
   writeVaultAuth(auth);
-}
-
-// ── Vault Secret Groups (matches vault-seed.sh conventions) ────────────────
-const VAULT_SECRET_GROUPS = {
-  salesforce: {
-    subpath: "salesforce",
-    fields: {
-      sfUsername: "username",
-      sfPassword: "password",
-      oauthConsumerKey: "consumer_key",
-      oauthConsumerSecret: "consumer_secret",
-    },
-  },
-  aws: {
-    subpath: "aws",
-    fields: {
-      awsUsername: "username",
-      awsPassword: "password",
-      awsAccountId: "account_id",
-      awsAccessKeyId: "access_key_id",
-      awsSecretAccessKey: "secret_access_key",
-      connectInstanceId: "connect_instance_id",
-    },
-  },
-  twilio: {
-    subpath: "twilio",
-    fields: {
-      twilioSid: "account_sid",
-      twilioToken: "auth_token",
-    },
-  },
-  gemini: {
-    subpath: "gemini",
-    fields: {
-      geminiApiKey: "api_key",
-    },
-  },
-};
-
-/**
- * Build _REF values from a Vault base path using grouped subpaths.
- * e.g. basePath="secret/data/voice/personal"
- *   → { oauthConsumerKeyRef: "secret/data/voice/personal/salesforce#consumer_key", ... }
- */
-function buildVaultRefsFromBasePath(basePath) {
-  const refs = {};
-  const base = basePath.replace(/\/+$/, "");
-  for (const group of Object.values(VAULT_SECRET_GROUPS)) {
-    for (const [credKey, vaultField] of Object.entries(group.fields)) {
-      refs[credKey + "Ref"] = `${base}/${group.subpath}#${vaultField}`;
-    }
-  }
-  return refs;
 }
 
 /**
@@ -406,137 +375,6 @@ async function readSecretsFromVault(vaultAddr, vaultToken, basePath) {
   return secrets;
 }
 
-function maskSensitiveValues(envMap) {
-  const masked = { ...envMap };
-  for (const key of Object.keys(masked)) {
-    if (isSensitiveKey(key) && masked[key]) {
-      masked[key] = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
-    }
-  }
-  return masked;
-}
-
-function generateEnvContent(profile, creds) {
-  const backend = creds?.secretsBackend || "env";
-  const isVault = backend === "vault";
-  const lines = [
-    `# Audrique Connection: ${profile.label}`,
-    `# Generated by Scenario Studio`,
-    ``,
-    `# Security / secrets`,
-    `SECRETS_BACKEND=${backend}`,
-    `REGULATED_MODE=${isVault ? "true" : "false"}`,
-  ];
-
-  if (isVault) {
-    lines.push(`VAULT_ADDR=${creds.vaultAddr || ""}`);
-    // VAULT_TOKEN is stored in profiles.json vault section, NOT in .env
-    // (plaintext token in .env triggers REGULATED_MODE violation)
-  }
-
-  const sfAuthMethod = creds?.sfAuthMethod || "password";
-  lines.push(
-    ``,
-    `# Salesforce`,
-    `SF_LOGIN_URL=${profile.salesforce?.loginUrl || "https://login.salesforce.com"}`,
-    `SF_AUTH_METHOD=${sfAuthMethod}`,
-  );
-
-  if (sfAuthMethod === "oauth") {
-    if (isVault) {
-      lines.push(`SF_OAUTH_CONSUMER_KEY=`);
-      lines.push(`SF_OAUTH_CONSUMER_KEY_REF=${creds?.oauthConsumerKeyRef || ""}`);
-      lines.push(`SF_OAUTH_CONSUMER_SECRET=`);
-      lines.push(`SF_OAUTH_CONSUMER_SECRET_REF=${creds?.oauthConsumerSecretRef || ""}`);
-    } else {
-      lines.push(`SF_OAUTH_CONSUMER_KEY=${creds?.sfOauthConsumerKey || ""}`);
-      lines.push(`SF_OAUTH_CONSUMER_SECRET=${creds?.sfOauthConsumerSecret || ""}`);
-    }
-    lines.push(`SF_OAUTH_CALLBACK_URL=${creds?.sfOauthCallbackUrl || "http://localhost:4200/oauth/callback"}`);
-  } else if (isVault) {
-    lines.push(`SF_USERNAME_REF=${creds?.sfUsernameRef || ""}`);
-    lines.push(`SF_PASSWORD_REF=${creds?.sfPasswordRef || ""}`);
-  } else {
-    lines.push(`SF_USERNAME=${creds?.sfUsername || ""}`);
-    lines.push(`SF_PASSWORD=${creds?.sfPassword || ""}`);
-  }
-
-  lines.push(
-    `SF_APP_NAME=${profile.salesforce?.appName || "Service Console"}`,
-    `SF_INSTANCE_URL=${creds?.sfInstanceUrl || ""}`,
-    `SF_STORAGE_STATE=.auth/sf-${profile.id}.json`,
-    `SF_SKIP_LOGIN=true`,
-    ``,
-    `# Voice test behavior`,
-    `CALL_TRIGGER_MODE=connect_ccp`,
-    `OMNI_TARGET_STATUS=Available`,
-    `VOICE_RING_TIMEOUT_SEC=180`,
-    ``,
-    `# Amazon Connect`,
-    `CONNECT_INSTANCE_ALIAS=${profile.connect?.instanceAlias || ""}`,
-  );
-
-  if (isVault) {
-    lines.push(`AWS_USERNAME=`);
-    lines.push(`AWS_USERNAME_REF=${creds?.awsUsernameRef || ""}`);
-    lines.push(`AWS_PASSWORD=`);
-    lines.push(`AWS_PASSWORD_REF=${creds?.awsPasswordRef || ""}`);
-    lines.push(`AWS_ACCOUNT_ID=`);
-    lines.push(`AWS_ACCOUNT_ID_REF=${creds?.awsAccountIdRef || ""}`);
-    lines.push(`# Connect Federation API (headless auth, no browser sign-in)`);
-    lines.push(`AWS_ACCESS_KEY_ID=`);
-    lines.push(`AWS_ACCESS_KEY_ID_REF=${creds?.awsAccessKeyIdRef || ""}`);
-    lines.push(`AWS_SECRET_ACCESS_KEY=`);
-    lines.push(`AWS_SECRET_ACCESS_KEY_REF=${creds?.awsSecretAccessKeyRef || ""}`);
-    lines.push(`CONNECT_INSTANCE_ID=`);
-    lines.push(`CONNECT_INSTANCE_ID_REF=${creds?.connectInstanceIdRef || ""}`);
-  } else {
-    lines.push(`AWS_USERNAME=${creds?.awsUsername || ""}`);
-    lines.push(`AWS_PASSWORD=${creds?.awsPassword || ""}`);
-    lines.push(`AWS_ACCOUNT_ID=${creds?.awsAccountId || ""}`);
-  }
-
-  lines.push(
-    `CONNECT_CONSOLE_REGION=${profile.connect?.region || "us-west-2"}`,
-    `CONNECT_STORAGE_STATE=.auth/connect-ccp-${profile.id}.json`,
-    `CONNECT_AUTO_AWS_LOGIN=true`,
-    ``,
-    `# Twilio (optional)`,
-  );
-
-  if (isVault) {
-    lines.push(`TWILIO_ACCOUNT_SID=`);
-    lines.push(`TWILIO_ACCOUNT_SID_REF=${creds?.twilioSidRef || ""}`);
-    lines.push(`TWILIO_AUTH_TOKEN=`);
-    lines.push(`TWILIO_AUTH_TOKEN_REF=${creds?.twilioTokenRef || ""}`);
-    lines.push(`TWILIO_FROM_NUMBER=${creds?.twilioFromNumber || ""}`);
-    lines.push(`TWILIO_FROM_NUMBER_REF=`);
-    lines.push(`CONNECT_ENTRYPOINT_NUMBER=${creds?.connectEntrypoint || ""}`);
-    lines.push(`CONNECT_ENTRYPOINT_NUMBER_REF=`);
-  } else {
-    lines.push(`TWILIO_ACCOUNT_SID=${creds?.twilioSid || ""}`);
-    lines.push(`TWILIO_AUTH_TOKEN=${creds?.twilioToken || ""}`);
-    lines.push(`TWILIO_FROM_NUMBER=${creds?.twilioFromNumber || ""}`);
-    lines.push(`CONNECT_ENTRYPOINT_NUMBER=${creds?.connectEntrypoint || ""}`);
-  }
-
-  // AI Providers (NL Caller — optional)
-  const hasGemini = isVault ? creds?.geminiApiKeyRef : creds?.geminiApiKey;
-  if (hasGemini) {
-    lines.push(`# AI Providers (NL Caller)`);
-    if (isVault) {
-      lines.push(`GEMINI_API_KEY=`);
-      lines.push(`GEMINI_API_KEY_REF=${creds?.geminiApiKeyRef || ""}`);
-    } else {
-      lines.push(`GEMINI_API_KEY=${creds?.geminiApiKey || ""}`);
-    }
-  }
-
-  lines.push(``);
-
-  return lines.join("\n");
-}
-
 // Backward-compatible wrapper
 function generateSkeletonEnv(profile) {
   return generateEnvContent(profile, null);
@@ -553,38 +391,92 @@ async function handleApi(req, res) {
     res.writeHead(204, {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
     });
     res.end();
     return true;
   }
 
+  // ── Auth routes (public — no auth guard) ──────────────────────────────
+  if (pathname.startsWith("/api/auth/")) {
+    const handled = await handleAuthRoutes(req, res, pathname, url);
+    if (handled) return true;
+  }
+
+  // ── Auth guard (when enabled, all non-auth routes require JWT) ────────
+  if (AUTH_ENABLED) {
+    try {
+      req._auth = requireAuth(req);
+    } catch (err) {
+      sendJson(res, err.statusCode || 401, { error: err.message });
+      return true;
+    }
+
+    // Role-based route protection (centralized)
+    const isWrite = req.method === "POST" || req.method === "PUT" || req.method === "DELETE";
+    if (isWrite) {
+      try {
+        requireRole(req._auth, "builder");
+      } catch (err) {
+        sendJson(res, err.statusCode || 403, { error: err.message });
+        return true;
+      }
+    }
+  }
+
   // GET /api/profiles — list all customer profiles (with auth status)
+  // DB-first: if platform.connection_profiles has data for this tenant, use it.
+  // Otherwise fall back to file-based profiles.json.
   if (pathname === "/api/profiles" && req.method === "GET") {
-    const data = readJsonFile("instances/profiles.json") || { profiles: [] };
-    // Annotate each profile with credential status
-    for (const p of data.profiles) {
-      const envMap = parseEnvFile(p.envFile);
-      if (!envMap) {
-        p._authStatus = "missing";
-      } else {
-        const backend = (envMap.SECRETS_BACKEND || "env").toLowerCase();
-        const sfAuthMethod = (envMap.SF_AUTH_METHOD || "password").toLowerCase();
-        p._authBackend = backend;
-        p._sfAuthMethod = sfAuthMethod;
-        if (sfAuthMethod === "oauth") {
-          const hasConsumerKey = !!(envMap.SF_OAUTH_CONSUMER_KEY || envMap.SF_OAUTH_CONSUMER_KEY_REF);
-          const oauthTokenFile = path.resolve(PROJECT_ROOT, `.auth/sf-oauth-${p.id}.json`);
-          const hasOAuthTokens = fs.existsSync(oauthTokenFile);
-          p._authStatus = hasConsumerKey ? (hasOAuthTokens ? "oauth-connected" : "oauth-configured") : "incomplete";
-        } else if (backend === "vault") {
-          const hasVault = (p.vault?.addr || envMap.VAULT_ADDR) && (getVaultToken(p.id) || envMap.VAULT_TOKEN);
-          p._authStatus = (hasVault && envMap.SF_PASSWORD_REF) ? "configured" : "incomplete";
+    let data = null;
+
+    // Try DB first
+    if (dbAvailable()) {
+      try {
+        const tid = getTenantId(req);
+        const hasDb = await platformProfilesQ.hasProfiles(tid);
+        if (hasDb) {
+          const dbProfiles = await platformProfilesQ.listProfiles(tid);
+          const profiles = dbProfiles.map(buildProfileFromDbRow);
+          const defaultProfile = dbProfiles.find((p) => p.is_default);
+          data = {
+            defaultInstance: defaultProfile?.profile_slug || profiles[0]?.id || "",
+            profiles,
+          };
+        }
+      } catch (err) {
+        console.warn("[profiles] DB read failed, falling back to file:", err.message);
+      }
+    }
+
+    // Fall back to file if DB had no data
+    if (!data) {
+      data = readJsonFile("instances/profiles.json") || { profiles: [] };
+      // Annotate each profile with credential status (file-based logic)
+      for (const p of data.profiles) {
+        const envMap = parseEnvFile(p.envFile);
+        if (!envMap) {
+          p._authStatus = "missing";
         } else {
-          p._authStatus = (envMap.SF_USERNAME && envMap.SF_PASSWORD) ? "configured" : "incomplete";
+          const backend = (envMap.SECRETS_BACKEND || "env").toLowerCase();
+          const sfAuthMethod = (envMap.SF_AUTH_METHOD || "password").toLowerCase();
+          p._authBackend = backend;
+          p._sfAuthMethod = sfAuthMethod;
+          if (sfAuthMethod === "oauth") {
+            const hasConsumerKey = !!(envMap.SF_OAUTH_CONSUMER_KEY || envMap.SF_OAUTH_CONSUMER_KEY_REF);
+            const oauthTokenFile = path.resolve(PROJECT_ROOT, `.auth/sf-oauth-${p.id}.json`);
+            const hasOAuthTokens = fs.existsSync(oauthTokenFile);
+            p._authStatus = hasConsumerKey ? (hasOAuthTokens ? "oauth-connected" : "oauth-configured") : "incomplete";
+          } else if (backend === "vault") {
+            const hasVault = (p.vault?.addr || envMap.VAULT_ADDR) && (getVaultToken(p.id) || envMap.VAULT_TOKEN);
+            p._authStatus = (hasVault && envMap.SF_PASSWORD_REF) ? "configured" : "incomplete";
+          } else {
+            p._authStatus = (envMap.SF_USERNAME && envMap.SF_PASSWORD) ? "configured" : "incomplete";
+          }
         }
       }
     }
+
     sendJson(res, 200, data);
     return true;
   }
@@ -989,9 +881,30 @@ async function handleApi(req, res) {
   // ── System Settings (Advanced Settings) ──────────────────────────────────
 
   // GET /api/system-settings — return merged defaults + saved values
+  // DB-first: if platform.system_settings has data for this tenant, use it.
+  // Otherwise fall back to file-based system-settings.json.
   if (pathname === "/api/system-settings" && req.method === "GET") {
     const defaults = getDefaultSystemSettings();
-    const saved = readJsonFile("instances/system-settings.json") || {};
+    let saved = {};
+
+    // Try DB first
+    if (dbAvailable()) {
+      try {
+        const tid = getTenantId(req);
+        const hasDb = await platformSettingsQ.hasSettings(tid);
+        if (hasDb) {
+          saved = await platformSettingsQ.getAllSettings(tid);
+        }
+      } catch (err) {
+        console.warn("[settings] DB read failed, falling back to file:", err.message);
+      }
+    }
+
+    // Fall back to file if DB had no data
+    if (Object.keys(saved).length === 0) {
+      saved = readJsonFile("instances/system-settings.json") || {};
+    }
+
     // Merge: saved values override defaults per-group
     const merged = {};
     for (const [group, entries] of Object.entries(defaults)) {
@@ -1002,6 +915,7 @@ async function handleApi(req, res) {
   }
 
   // PUT /api/system-settings — save advanced settings
+  // Writes to DB when available (keeps in sync with Admin app), falls back to file.
   if (pathname === "/api/system-settings" && req.method === "PUT") {
     const body = await parseBody(req);
     if (!body || typeof body !== "object") {
@@ -1021,6 +935,19 @@ async function handleApi(req, res) {
         }
       }
     }
+
+    // Save to DB when available
+    if (dbAvailable()) {
+      try {
+        const tid = getTenantId(req);
+        const userId = AUTH_ENABLED && req?._auth ? req._auth.userId : null;
+        await platformSettingsQ.bulkUpsertSettings(tid, cleaned, userId);
+      } catch (err) {
+        console.warn("[settings] DB write failed, falling back to file:", err.message);
+      }
+    }
+
+    // Always write to file as well (backward compat for file-based deployments)
     writeJsonFile("instances/system-settings.json", cleaned);
     sendJson(res, 200, { message: "System settings saved" });
     return true;
@@ -1083,6 +1010,33 @@ async function handleApi(req, res) {
     fs.mkdirSync(path.dirname(envResolved), { recursive: true });
     fs.writeFileSync(envResolved, envContent);
 
+    // Sync to DB when available
+    if (dbAvailable()) {
+      try {
+        const tid = getTenantId(req);
+        const userId = AUTH_ENABLED && req?._auth ? req._auth.userId : null;
+        const created = await platformProfilesQ.createProfile(tid, {
+          profileSlug: id,
+          label: profile.label,
+          customer: profile.customer,
+          isDefault: profilesData.defaultInstance === id,
+          sfLoginUrl: profile.salesforce?.loginUrl,
+          sfAppName: profile.salesforce?.appName,
+          connectRegion: profile.connect?.region,
+          connectInstanceAlias: profile.connect?.instanceAlias,
+          vaultAddr: profile.vault?.addr,
+          vaultBasePath: profile.vault?.basePath,
+          vocabulary: profile.vocabulary || {},
+        }, userId);
+        // Sync vault token to DB
+        if (vault?.token && created?.id) {
+          await platformProfilesQ.setVaultToken(tid, created.id, vault.token, userId);
+        }
+      } catch (err) {
+        console.warn("[profiles] DB create failed:", err.message);
+      }
+    }
+
     sendJson(res, 200, { id, envFile });
     return true;
   }
@@ -1120,9 +1074,44 @@ async function handleApi(req, res) {
       if (vault.addr !== undefined) profile.vault.addr = vault.addr;
       if (vault.basePath !== undefined) profile.vault.basePath = vault.basePath;
       // Vault token stored in gitignored file, not profiles.json
-      if (vault.token !== undefined) setVaultToken(id, vault.token);
+      // Skip if masked (bullets) — client echoed back the masked display value, don't overwrite
+      if (vault.token && !vault.token.startsWith("\u2022")) {
+        setVaultToken(id, vault.token);
+      }
     }
     writeJsonFile("instances/profiles.json", profilesData);
+
+    // Sync to DB when available
+    if (dbAvailable()) {
+      try {
+        const tid = getTenantId(req);
+        const userId = AUTH_ENABLED && req?._auth ? req._auth.userId : null;
+        await platformProfilesQ.updateProfile(tid, id, {
+          label: profile.label,
+          customer: profile.customer,
+          sfLoginUrl: profile.salesforce?.loginUrl,
+          sfAppName: profile.salesforce?.appName,
+          connectRegion: profile.connect?.region,
+          connectInstanceAlias: profile.connect?.instanceAlias,
+          vaultAddr: profile.vault?.addr,
+          vaultBasePath: profile.vault?.basePath,
+        }, userId);
+        // Sync vault token to DB
+        if (vault?.token !== undefined) {
+          const dbProfile = await platformProfilesQ.getProfileBySlug(tid, id);
+          if (dbProfile) {
+            if (vault.token) {
+              await platformProfilesQ.setVaultToken(tid, dbProfile.id, vault.token, userId);
+            } else {
+              await platformProfilesQ.deleteVaultToken(tid, dbProfile.id);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[profiles] DB update failed:", err.message);
+      }
+    }
+
     sendJson(res, 200, { message: "Profile updated" });
     return true;
   }
@@ -1163,6 +1152,17 @@ async function handleApi(req, res) {
       const envPath = path.resolve(PROJECT_ROOT, deletedProfile.envFile);
       if (fs.existsSync(envPath)) fs.unlinkSync(envPath);
     }
+
+    // Sync to DB when available
+    if (dbAvailable()) {
+      try {
+        const tid = getTenantId(req);
+        await platformProfilesQ.deleteProfile(tid, id);
+      } catch (err) {
+        console.warn("[profiles] DB delete failed:", err.message);
+      }
+    }
+
     sendJson(res, 200, { message: `Connection "${id}" deleted` });
     return true;
   }
@@ -1225,18 +1225,14 @@ async function handleApi(req, res) {
       return true;
     }
 
-    const isVault = (credentials?.secretsBackend || "env") === "vault";
-    const basePath = profile.vault?.basePath || "";
+    // Resolve vault settings: per-profile config wins, falls back to global
+    const vaultSettings = resolveVaultSettings(profile);
+    const hasVault = !!(vaultSettings.addr && vaultSettings.basePath && vaultSettings.token);
 
-    // If Vault mode with basePath and actual values → write to Vault first
+    // Write secrets to Vault when available and caller requests it
     let vaultWriteResult = null;
-    if (isVault && basePath && credentials?._writeToVault) {
-      const vaultAddr = profile.vault?.addr || credentials?.vaultAddr || "";
-      const vaultToken = getVaultToken(id);
-      if (!vaultAddr || !vaultToken) {
-        sendJson(res, 400, { error: "Vault address and token required for Vault write" });
-        return true;
-      }
+    if (hasVault && credentials?._writeToVault) {
+      const { addr: vaultAddr, basePath, token: vaultToken } = vaultSettings;
       vaultWriteResult = await writeSecretsToVault(vaultAddr, vaultToken, basePath, credentials);
       if (!vaultWriteResult.success) {
         sendJson(res, 500, {
@@ -1247,9 +1243,11 @@ async function handleApi(req, res) {
         return true;
       }
       // Auto-generate refs from basePath so .env only has paths, never plaintext
-      const autoRefs = buildVaultRefsFromBasePath(basePath);
+      const autoRefs = buildVaultRefsFromBasePath(vaultSettings.basePath);
       Object.assign(credentials, autoRefs);
       delete credentials._writeToVault;
+      // Mark vault backend so env file reflects the correct SECRETS_BACKEND
+      if (!credentials.secretsBackend) credentials.secretsBackend = "vault";
     }
 
     const envContent = generateEnvContent(profile, credentials || {});
@@ -1257,9 +1255,78 @@ async function handleApi(req, res) {
     fs.mkdirSync(path.dirname(envResolved), { recursive: true });
     fs.writeFileSync(envResolved, envContent);
 
+    // Sync credentials to DB when available
+    if (dbAvailable() && credentials) {
+      try {
+        const tid = getTenantId(req);
+        const userId = AUTH_ENABLED && req?._auth ? req._auth.userId : null;
+        const dbProfile = await platformProfilesQ.getProfileBySlug(tid, id);
+        if (dbProfile) {
+          const dbCreds = Object.entries(credentials)
+            .filter(([k]) => !k.startsWith("_")) // Skip internal flags like _writeToVault
+            .map(([key, value]) => ({
+              key,
+              value: String(value),
+              isSensitive: /password|secret|token|key/i.test(key),
+              isVaultRef: String(value).startsWith("secret/") || String(value).startsWith("vault:"),
+            }));
+          if (dbCreds.length > 0) {
+            await platformProfilesQ.upsertCredentials(tid, dbProfile.id, dbCreds, userId);
+          }
+        }
+      } catch (err) {
+        console.warn("[profiles] DB credential sync failed:", err.message);
+      }
+    }
+
     const result = { message: "Credentials saved", envFile: profile.envFile };
     if (vaultWriteResult) result.vaultWritten = vaultWriteResult.written;
     sendJson(res, 200, result);
+    return true;
+  }
+
+  // GET /api/vault-config — return global vault config (never exposes token)
+  if (pathname === "/api/vault-config" && req.method === "GET") {
+    const cfg = readVaultConfig();
+    sendJson(res, 200, {
+      addr: cfg.addr || "",
+      basePath: cfg.basePath || "",
+      hasToken: !!getVaultToken("_global"),
+    });
+    return true;
+  }
+
+  // PUT /api/vault-config — save global vault config
+  if (pathname === "/api/vault-config" && req.method === "PUT") {
+    const body = await parseBody(req);
+    const { addr, basePath, token } = body;
+    const cfg = readVaultConfig();
+    if (addr !== undefined) cfg.addr = addr.trim();
+    if (basePath !== undefined) cfg.basePath = basePath.trim();
+    writeVaultConfig(cfg);
+    if (token && !token.startsWith("\u2022")) setVaultToken("_global", token.trim());
+    sendJson(res, 200, { message: "Vault settings saved" });
+    return true;
+  }
+
+  // POST /api/vault-config/test — verify vault connectivity
+  if (pathname === "/api/vault-config/test" && req.method === "POST") {
+    const body = await parseBody(req);
+    const { addr, token } = body;
+    if (!addr || !token) {
+      sendJson(res, 200, { ok: false, error: "Address and token required" });
+      return true;
+    }
+    try {
+      const r = await fetch(`${addr.replace(/\/+$/, "")}/v1/sys/health`, {
+        headers: { "X-Vault-Token": token },
+        signal: AbortSignal.timeout(5000),
+      });
+      // 200 = active, 429 = standby, 472/473 = DR/perf — all mean reachable
+      sendJson(res, 200, { ok: r.ok || [429, 472, 473].includes(r.status), status: r.status });
+    } catch (e) {
+      sendJson(res, 200, { ok: false, error: e.message });
+    }
     return true;
   }
 
@@ -1382,7 +1449,17 @@ async function handleApi(req, res) {
       return true;
     }
     const envMap = parseEnvFile(profile.envFile) || {};
-    const consumerKey = envMap.SF_OAUTH_CONSUMER_KEY || envMap.SF_OAUTH_CONSUMER_KEY_REF || BUNDLED_OAUTH_CONSUMER_KEY || "";
+    let consumerKey = envMap.SF_OAUTH_CONSUMER_KEY || "";
+    // Resolve from Vault if only a ref is available
+    if (!consumerKey && envMap.SF_OAUTH_CONSUMER_KEY_REF) {
+      const ref = envMap.SF_OAUTH_CONSUMER_KEY_REF;
+      const vaultAddr = profile.vault?.addr || "";
+      const vaultToken = getVaultToken(profileId);
+      if (ref.includes("#") && vaultAddr && vaultToken) {
+        consumerKey = await resolveVaultRef(ref, vaultAddr, vaultToken) || "";
+      }
+    }
+    if (!consumerKey) consumerKey = BUNDLED_OAUTH_CONSUMER_KEY || "";
     if (!consumerKey) {
       sendJson(res, 400, { error: "No OAuth Consumer Key available. Configure a Connected App or set AUDRIQUE_OAUTH_CONSUMER_KEY." });
       return true;
@@ -1420,8 +1497,24 @@ async function handleApi(req, res) {
       return true;
     }
     const envMap = parseEnvFile(profile.envFile) || {};
-    const consumerKey = envMap.SF_OAUTH_CONSUMER_KEY || envMap.SF_OAUTH_CONSUMER_KEY_REF || BUNDLED_OAUTH_CONSUMER_KEY || "";
-    const consumerSecret = envMap.SF_OAUTH_CONSUMER_SECRET || envMap.SF_OAUTH_CONSUMER_SECRET_REF || BUNDLED_OAUTH_CONSUMER_SECRET || "";
+    const vaultAddr = profile.vault?.addr || "";
+    const vaultToken = getVaultToken(profileId);
+    let consumerKey = envMap.SF_OAUTH_CONSUMER_KEY || "";
+    if (!consumerKey && envMap.SF_OAUTH_CONSUMER_KEY_REF) {
+      const ref = envMap.SF_OAUTH_CONSUMER_KEY_REF;
+      if (ref.includes("#") && vaultAddr && vaultToken) {
+        consumerKey = await resolveVaultRef(ref, vaultAddr, vaultToken) || "";
+      }
+    }
+    if (!consumerKey) consumerKey = BUNDLED_OAUTH_CONSUMER_KEY || "";
+    let consumerSecret = envMap.SF_OAUTH_CONSUMER_SECRET || "";
+    if (!consumerSecret && envMap.SF_OAUTH_CONSUMER_SECRET_REF) {
+      const ref = envMap.SF_OAUTH_CONSUMER_SECRET_REF;
+      if (ref.includes("#") && vaultAddr && vaultToken) {
+        consumerSecret = await resolveVaultRef(ref, vaultAddr, vaultToken) || "";
+      }
+    }
+    if (!consumerSecret) consumerSecret = BUNDLED_OAUTH_CONSUMER_SECRET || "";
     if (!consumerKey) {
       sendJson(res, 400, { error: "No OAuth Consumer Key available. Configure a Connected App or set AUDRIQUE_OAUTH_CONSUMER_KEY." });
       return true;
@@ -1443,8 +1536,32 @@ async function handleApi(req, res) {
       });
       console.log(`[oauth] Tokens received. Instance: ${tokens.instance_url}`);
 
-      // Step 2: Save tokens
+      // Step 2: Save tokens to local file (fallback / dev convenience)
       oauth.saveOAuthTokens(profileId, tokens);
+
+      // Step 2b: Persist refresh_token + instance_url to Vault when configured.
+      // This makes the OAuth flow work in Docker/CI without pre-captured sessions.
+      if (vaultAddr && vaultToken && tokens.refresh_token) {
+        const basePath = profile.vault?.basePath
+          ? `${profile.vault.basePath}/salesforce`
+          : `secret/data/voice/${profileId}/salesforce`;
+        try {
+          // Read existing secret so we don't overwrite other fields
+          const existing = await fetch(
+            `${vaultAddr.replace(/\/+$/, "")}/v1/${basePath}`,
+            { headers: { "X-Vault-Token": vaultToken } }
+          ).then((r) => r.ok ? r.json() : null).then((d) => d?.data?.data || {}).catch(() => ({}));
+
+          await fetch(`${vaultAddr.replace(/\/+$/, "")}/v1/${basePath}`, {
+            method: "POST",
+            headers: { "X-Vault-Token": vaultToken, "Content-Type": "application/json" },
+            body: JSON.stringify({ data: { ...existing, refresh_token: tokens.refresh_token, instance_url: tokens.instance_url } }),
+          });
+          console.log(`[oauth] refresh_token + instance_url saved to Vault at ${basePath}`);
+        } catch (vaultErr) {
+          console.warn(`[oauth] Could not save tokens to Vault: ${vaultErr.message}`);
+        }
+      }
 
       // Step 3: Create browser session via frontdoor.jsp
       console.log(`[oauth] Creating browser session via frontdoor.jsp...`);
@@ -1995,8 +2112,10 @@ async function handleApi(req, res) {
 
 // ── Tenant resolution ───────────────────────────────────────────────────────
 const DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001";
-function getTenantId(/* req */) {
-  // Future: extract from auth header or session. For now, use default tenant.
+function getTenantId(req) {
+  if (AUTH_ENABLED && req?._auth) {
+    return req._auth.tenantId;
+  }
   return DEFAULT_TENANT_ID;
 }
 
@@ -2039,6 +2158,20 @@ const server = http.createServer(async (req, res) => {
     let filePath = req.url === "/" ? "/index.html" : req.url;
     // Strip query strings
     filePath = filePath.split("?")[0];
+
+    // Auth pages — served without auth check (login, register, etc.)
+    const AUTH_PAGES = ["/login.html", "/register.html", "/forgot-password.html", "/reset-password.html"];
+    if (AUTH_PAGES.includes(filePath) || filePath === "/auth.js") {
+      const ext = path.extname(filePath);
+      const contentType = MIME[ext] || "application/octet-stream";
+      sendFile(res, `public${filePath}`, contentType);
+      return;
+    }
+
+    // Note: auth redirection for unauthenticated users is handled client-side
+    // by auth.js (tryRestore → probe → redirect). The server always serves
+    // index.html so the SPA can check sessionStorage + refresh cookie.
+
     const ext = path.extname(filePath);
     const contentType = MIME[ext] || "application/octet-stream";
     sendFile(res, `public${filePath}`, contentType);
@@ -2060,7 +2193,7 @@ async function autoIngestExistingResults() {
   if (!fs.existsSync(resultsRoot)) return;
 
   try {
-    const tid = getTenantId();
+    const tid = getTenantId(null);
     const dirs = fs.readdirSync(resultsRoot, { withFileTypes: true })
       .filter((d) => d.isDirectory())
       .map((d) => d.name)
@@ -2094,6 +2227,21 @@ async function autoIngestExistingResults() {
   }
 }
 
+async function runProfileMigration() {
+  if (!dbAvailable()) return;
+  const fileData = readJsonFile("instances/profiles.json");
+  const tid = "00000000-0000-0000-0000-000000000001";
+  const result = await migrateFileProfilesToDb({
+    listProfiles: (t) => platformProfilesQ.listProfiles(t),
+    createProfile: (t, d) => platformProfilesQ.createProfile(t, d),
+    fileData,
+    tenantId: tid,
+  });
+  if (result.errors.length) {
+    console.warn("[migrate] Some profiles failed to migrate:", result.errors);
+  }
+}
+
 async function startServer() {
   await resolveOAuthKeysFromVault();
 
@@ -2102,6 +2250,7 @@ async function startServer() {
     await initPool();
     if (dbAvailable()) {
       await runMigrations();
+      await runProfileMigration();
     }
   } catch (err) {
     console.error("[db] Database initialization failed:", err.message);

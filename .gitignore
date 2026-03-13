@@ -17,6 +17,8 @@ instances/*.env
 
 # Vault tokens (per-profile, never commit)
 instances/.vault-auth.json
+# Global vault config (one-time admin setup, never commit)
+instances/.vault-config.json
 
 # Discovery cache (auto-generated, per-profile)
 .cache/
@@ -44,6 +46,9 @@ screenshots/
 
 # OS
 Thumbs.db
+
+# Internal admin app (not public-facing)
+webapp/admin/
 
 # Runtime
 *.log

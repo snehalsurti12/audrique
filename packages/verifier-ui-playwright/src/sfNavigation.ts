@@ -210,6 +210,7 @@ export async function ensureSalesforceApp(page: Page, appName: string): Promise<
   const appDetectTimeoutMs = Number(process.env.SF_APP_DETECT_TIMEOUT_SEC ?? 5) * 1000;
   const appSwitchTimeoutMs = Number(process.env.SF_APP_SWITCH_TIMEOUT_SEC ?? 7) * 1000;
   if (await waitForSalesforceApp(page, appName, appDetectTimeoutMs)) {
+    console.log(`[sfNavigation] Already in "${appName}" — skipping App Launcher`);
     return;
   }
 
@@ -235,41 +236,58 @@ export async function ensureSalesforceApp(page: Page, appName: string): Promise<
     }
   }
 
+  // Wait for the Lightning nav bar to render before looking for the App Launcher button.
+  // The nav bar takes a moment to appear after page load.
+  await page
+    .locator("one-app-nav-bar, nav.slds-context-bar, .slds-global-header")
+    .first()
+    .waitFor({ state: "visible", timeout: 10000 })
+    .catch(() => undefined);
+
+  // The App Launcher button is a grid-dots icon — no visible text.
+  // Most reliable selectors: title attribute, aria-label, or the LWC component container.
   const appLauncher = page
-    .getByRole("button", { name: /app launcher/i })
-    .or(page.getByText(/app launcher/i))
+    .locator([
+      "button[title='App Launcher' i]",
+      "button[aria-label*='App Launcher' i]",
+      "one-app-launcher-header button",
+      ".slds-icon-waffle_container button",
+      ".slds-global-header__item button[title*='launcher' i]",
+    ].join(", "))
+    .or(page.getByRole("button", { name: /app launcher/i }))
     .first();
-  if ((await appLauncher.count()) > 0) {
+
+  const appLauncherVisible = (await appLauncher.count()) > 0 && (await appLauncher.isVisible().catch(() => false));
+  if (!appLauncherVisible) {
+    // Diagnostic: capture the page state when the App Launcher button itself cannot be found
+    await page
+      .screenshot({ path: "test-results/app-launcher-button-not-found.png", fullPage: false })
+      .catch(() => undefined);
+    console.warn(
+      `[sfNavigation] App Launcher button not found on page. URL=${page.url()} ` +
+      `Screenshot: test-results/app-launcher-button-not-found.png`
+    );
+  }
+  if (appLauncherVisible) {
     await appLauncher.click({ force: true });
     await page.waitForTimeout(600);
     const search = page
       .getByRole("searchbox", { name: /search apps|search apps and items/i })
       .or(page.getByPlaceholder(/search apps|search apps and items/i))
       .first();
+    const appRegex = new RegExp(escapeRegex(appName), "i");
     if ((await search.count()) > 0) {
       await search.fill(appName);
-      await page.waitForTimeout(600);
-    }
-    const appRegex = new RegExp(escapeRegex(appName), "i");
-    // Lightning App Launcher uses custom components — try multiple locator strategies
-    const appResultCandidates = [
-      page.getByRole("link", { name: appRegex }).first(),
-      page.getByRole("option", { name: appRegex }).first(),
-      page.getByRole("menuitem", { name: appRegex }).first(),
-      page.getByRole("button", { name: appRegex }).first(),
-      // Lightning one-app-launcher-menu-item with matching text
-      page.locator("one-app-launcher-menu-item a, one-app-launcher-app-tile a").filter({ hasText: appRegex }).first(),
-      // Fallback: any clickable element with the app name inside the App Launcher
-      page.locator(".appTileTitle, .slds-truncate").filter({ hasText: appRegex }).first(),
-    ];
-    let clicked = false;
-    for (const candidate of appResultCandidates) {
-      if ((await candidate.count()) > 0 && (await candidate.isVisible().catch(() => false))) {
-        await Promise.all([page.waitForLoadState("domcontentloaded"), candidate.click({ force: true })]);
-        await page.waitForTimeout(1200);
-        clicked = true;
-        break;
-      }
+      // Wait briefly for results to populate
+      await page.waitForTimeout(800);
+
+      // Primary: keyboard navigation — works regardless of shadow DOM / visibility issues.
+      // ArrowDown moves focus from search box to first result, Enter activates it.
+      console.log(`[sfNavigation] Navigating to App Launcher result for "${appName}" via keyboard`);
+      await page.keyboard.press("ArrowDown");
+      await page.waitForTimeout(200);
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(1500);
     }
   }
 

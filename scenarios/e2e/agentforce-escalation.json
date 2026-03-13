@@ -1,0 +1,67 @@
+{
+  "name": "Agentforce → Human Agent Escalation",
+  "version": 2,
+  "connectionSetId": "cdo-org",
+  "stopOnFailure": false,
+  "defaults": {
+    "timeouts": {
+      "ringSec": 120
+    }
+  },
+  "scenarios": [
+    {
+      "id": "agentforce-escalation-billing",
+      "description": "AI caller requests to speak with a human agent. Validates Agentforce escalates the call, human agent receives it in SF, and screen pop shows correct contact.",
+      "enabled": true,
+      "callTrigger": {
+        "mode": "nl_caller",
+        "expectation": "agent_offer",
+        "verifyAgentforceTab": true,
+        "requireConnectedCall": false
+      },
+      "nlCaller": {
+        "conversationMode": "gemini",
+        "maxTurns": 20,
+        "maxDurationSec": 300,
+        "turnTimeoutSec": 15,
+        "topic": "escalation",
+        "tone": "frustrated",
+        "voice": "Aoede",
+        "persona": {
+          "name": "John Smith",
+          "accountNumber": "ACC-12345",
+          "context": "Frustrated customer. Was charged $49.99 on March 1st for a service already cancelled. Has called twice before with no resolution.",
+          "objective": "Get the $49.99 charge reversed. First explain the issue clearly and try to get help from the AI agent. After 2-3 turns if the issue is not resolved or if the agent offers to transfer you, ask to speak with a human agent."
+        }
+      },
+      "conversationAssertions": [
+        {
+          "type": "agent_greeted_customer",
+          "within_turns": 2
+        },
+        {
+          "type": "escalation_detected"
+        }
+      ],
+      "steps": [
+        {
+          "action": "preflight"
+        },
+        {
+          "action": "trigger_call"
+        },
+        {
+          "action": "wait_for_screen_pop"
+        },
+        {
+          "action": "assert_contact_matched"
+        }
+      ]
+    }
+  ],
+  "vocabulary": {
+    "agentApp": "Service Console",
+    "omniStatus": "Available",
+    "entryNumber": "+18333199528"
+  }
+}
